@@ -11,13 +11,13 @@ from telegram.ext import (
 )
 
 from tea import (
-    tea_product, tea_photo, tea_skip_photo, tea_rating, tea_likes, tea_review_text
+    tea_product, tea_photo, tea_photo_reprompt, tea_rating, tea_likes, tea_review_text
 )
 from service import (
     service_likes, service_likes_handler, service_rating_handler, service_review_text
 )
 from delivery import (
-    delivery_product, delivery_photo, delivery_skip_photo, delivery_rating, delivery_review_text
+    delivery_likes, delivery_likes_handler, delivery_rating_handler, delivery_review_text
 )
 from form import (
     format_tea_review, format_service_review, format_delivery_review
@@ -45,11 +45,10 @@ SERVICE_LIKES = 7
 SERVICE_RATING = 8
 SERVICE_REVIEW_TEXT = 9
 
-# Delivery states (example; adjust as needed)
-DELIVERY_PRODUCT = 10
-DELIVERY_PHOTO = 11
-DELIVERY_RATING = 12
-DELIVERY_REVIEW_TEXT = 13
+# Delivery states (new flow)
+DELIVERY_LIKES = 10
+DELIVERY_RATING = 11
+DELIVERY_REVIEW_TEXT = 12
 
 # Replace with your bot token and channel ID
 import json ; bot_config = json.load(open("bot_config.json")) 
@@ -63,7 +62,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     keyboard = ReplyKeyboardMarkup([["Оставить отзыв"]], resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text("Welcome! Click the button to leave a review.", reply_markup=keyboard)
+    await update.message.reply_text("Приветствую! Нажмите на кнопку «ОСТАВИТЬ ОТЗЫВ» ниже ", reply_markup=keyboard)
 
 async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the review process by asking for category."""
@@ -76,14 +75,14 @@ async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     keyboard = [
         [
-            InlineKeyboardButton("Чай", callback_data="чай"),
-            InlineKeyboardButton("Сервис", callback_data="сервис"),
-            InlineKeyboardButton("Доставка", callback_data="доставка"),
+            InlineKeyboardButton("ЧАЙ", callback_data="чай"),
+            InlineKeyboardButton("СЕРВИС", callback_data="сервис"),
+            InlineKeyboardButton("ДОСТАВКА", callback_data="доставка"),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text("Please select the category:", reply_markup=reply_markup)
+    await update.message.reply_text("На что пишем отзыв?:", reply_markup=reply_markup)
     return CATEGORY
 
 async def category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -94,16 +93,18 @@ async def category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['current_category'] = selected_category
 
     if selected_category == 'чай':
-        await query.edit_message_text("Selected category: Чай\n\nWhat's the name of the product?")
+        await query.edit_message_text("Выбранная категория: ЧАЙ	\n\nВведите название продукта:")
         return TEA_PRODUCT
     elif selected_category == 'сервис':
-        await query.edit_message_text("Selected category: Сервис")
+        await query.edit_message_text("Выбранная категория: Сервис")
         # Explicitly start service flow by calling initial likes function
         await service_likes(query, context)
         return SERVICE_LIKES
     elif selected_category == 'доставка':
-        await query.edit_message_text("Selected category: Доставка\n\nWhat's the name of the product?")
-        return DELIVERY_PRODUCT
+        await query.edit_message_text("Выбранная категория: Доставка")
+        # Explicitly start delivery flow by calling initial likes function
+        await delivery_likes(query, context)
+        return DELIVERY_LIKES
 
 async def more_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles whether to add more reviews."""
@@ -112,26 +113,26 @@ async def more_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     data = query.data
 
     if data == 'more_yes':
-        await query.edit_message_text("Great! Let's start a new review.")
+        await query.edit_message_text("Хорошо! Вы можете оставить еще один отзыв.")
         # Back to category selection
         keyboard = [
             [
-                InlineKeyboardButton("Чай", callback_data="чай"),
-                InlineKeyboardButton("Сервис", callback_data="сервис"),
-                InlineKeyboardButton("Доставка", callback_data="доставка"),
+                InlineKeyboardButton("ЧАЙ", callback_data="чай"),
+                InlineKeyboardButton("СЕРВИС", callback_data="сервис"),
+                InlineKeyboardButton("ДОСТАВКА", callback_data="доставка"),
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text("Please select the category for the next review:", reply_markup=reply_markup)
+        await query.message.reply_text("На что пишем отзыв?:", reply_markup=reply_markup)
         return CATEGORY
     elif data == 'more_no':
         try:
-            await query.edit_message_text("Thank you! Posting all reviews to the channel.")
+            await query.edit_message_text("Благодарим за отзыв! Вот вам промо-код на следующую покупку чая")
             # Post all reviews
             await post_reviews(update, context)
         except Exception as e:
-            logger.error(f"Error in posting reviews: {e}")
-            await query.message.reply_text("Sorry, there was an error posting the reviews. Please try again later.")
+            logger.error(f"Ошибка в отправке отзыва {e}")
+            await query.message.reply_text("Извините, произошла ошибка при публикации отзывов. Пожалуйста, попробуйте позже.")
         finally:
             # Clear data
             context.user_data.clear()
@@ -153,7 +154,7 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             message = format_delivery_review(review)
         else:
             # Fallback
-            message = "Unknown category review."
+            message = "Неизвестная отзыва."
 
         try:
             if photo:
@@ -164,11 +165,11 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             logger.error(f"Error posting review for {category}: {e}")
             # User-friendly error
             if hasattr(update, 'callback_query'):
-                await update.callback_query.message.reply_text("Sorry, there was an error posting one of the reviews.")
+                await update.callback_query.message.reply_text("Извините, произошла ошибка при публикации одного из отзывов.")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels the review process."""
-    await update.message.reply_text("Review process canceled.")
+    await update.message.reply_text("Отзыв отменен.")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -192,7 +193,7 @@ def main() -> None:
             TEA_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tea_product)],
             TEA_PHOTO: [
                 MessageHandler(filters.PHOTO, tea_photo),
-                CallbackQueryHandler(tea_skip_photo, pattern="skip_photo"),
+                MessageHandler(filters.ALL & ~filters.PHOTO & ~filters.COMMAND, tea_photo_reprompt),  # Reprompt for non-photo
             ],
             TEA_RATING: [CallbackQueryHandler(tea_rating, pattern="^rate_")],
             TEA_LIKES: [CallbackQueryHandler(tea_likes, pattern="^likes_")],
@@ -201,13 +202,9 @@ def main() -> None:
             SERVICE_LIKES: [CallbackQueryHandler(service_likes_handler, pattern="^likes_")],
             SERVICE_RATING: [CallbackQueryHandler(service_rating_handler, pattern="^rate_")],
             SERVICE_REVIEW_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, service_review_text)],
-            # Delivery states
-            DELIVERY_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, delivery_product)],
-            DELIVERY_PHOTO: [
-                MessageHandler(filters.PHOTO, delivery_photo),
-                CallbackQueryHandler(delivery_skip_photo, pattern="skip_photo"),
-            ],
-            DELIVERY_RATING: [CallbackQueryHandler(delivery_rating, pattern="^rate_")],
+            # Delivery states (new flow)
+            DELIVERY_LIKES: [CallbackQueryHandler(delivery_likes_handler, pattern="^likes_")],
+            DELIVERY_RATING: [CallbackQueryHandler(delivery_rating_handler, pattern="^rate_")],
             DELIVERY_REVIEW_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, delivery_review_text)],
             # Common more reviews
             MORE_REVIEWS: [CallbackQueryHandler(more_reviews, pattern="^more_")],

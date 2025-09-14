@@ -9,57 +9,41 @@ TEA_REVIEW_TEXT = 6
 MORE_REVIEWS = 1  # Hardcode for return after review
 
 async def tea_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Stores the product name and asks for photo (Tea category)."""
+    """Stores the product name and asks for photo (Tea category - no skip)."""
     context.user_data['current_product'] = update.message.text
 
-    keyboard = [[InlineKeyboardButton("Skip", callback_data="skip_photo")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text("Please add a photo (or skip):", reply_markup=reply_markup)
-    return 3  # TEA_PHOTO
+    await update.message.reply_text("Прикрепите фото продукта.")
+    return TEA_PHOTO
 
 async def tea_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Stores the photo and shows rating buttons (Tea category)."""
-    photo_file = update.message.photo[-1].file_id
-    context.user_data['current_photo'] = photo_file
+    if update.message.photo:
+        photo_file = update.message.photo[-1].file_id
+        context.user_data['current_photo'] = photo_file
+        await update.message.reply_text("Фото успешно добавлено!")
 
-    await update.message.reply_text("Photo received!")
-
-    # Show rating buttons
-    keyboard = [
-        [
-            InlineKeyboardButton("1", callback_data="rate_1"),
-            InlineKeyboardButton("2", callback_data="rate_2"),
-            InlineKeyboardButton("3", callback_data="rate_3"),
-            InlineKeyboardButton("4", callback_data="rate_4"),
-            InlineKeyboardButton("5", callback_data="rate_5"),
+        # Show rating buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("1", callback_data="rate_1"),
+                InlineKeyboardButton("2", callback_data="rate_2"),
+                InlineKeyboardButton("3", callback_data="rate_3"),
+                InlineKeyboardButton("4", callback_data="rate_4"),
+                InlineKeyboardButton("5", callback_data="rate_5"),
+            ]
         ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text("Select your rating:", reply_markup=reply_markup)
-    return 4  # TEA_RATING
+        await update.message.reply_text("Оцените чай по шкале:", reply_markup=reply_markup)
+        return TEA_RATING
+    else:
+        # Reprompt if not photo
+        return TEA_PHOTO
 
-async def tea_skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Skips the photo step and shows rating buttons (Tea category)."""
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("Photo skipped.")
-
-    # Show rating buttons
-    keyboard = [
-        [
-            InlineKeyboardButton("1", callback_data="rate_1"),
-            InlineKeyboardButton("2", callback_data="rate_2"),
-            InlineKeyboardButton("3", callback_data="rate_3"),
-            InlineKeyboardButton("4", callback_data="rate_4"),
-            InlineKeyboardButton("5", callback_data="rate_5"),
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await query.message.reply_text("Select your rating:", reply_markup=reply_markup)
-    return 4  # TEA_RATING
+async def tea_photo_reprompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Reprompts for photo if non-photo message sent."""
+    await update.message.reply_text("Прикрепите фото продукта")
+    return TEA_PHOTO
 
 async def tea_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles rating selection (Tea category)."""
@@ -68,12 +52,12 @@ async def tea_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     rating = int(query.data.split('_')[1])
     context.user_data['current_rating'] = rating
 
-    await query.edit_message_text(f"Rating selected: {rating} ({'⭐' * rating})")
+    await query.edit_message_text(f"Ваша оценка: {rating} ({'⭐' * rating})")
 
-    # Show likes buttons for Tea
+    # Show likes buttons for Tea (Russian)
     selected = set()
     context.user_data['current_likes'] = selected
-    options = {'taste': 'Taste', 'aroma': 'Aroma', 'feeling': 'Feeling'}
+    options = {'taste': 'ВКУС', 'aroma': 'АРОМАТ', 'feeling': 'ОЩУЩЕНИЕ ОТ ЧАЯ'}
     all_selected = len(selected) == len(options)
 
     keyboard = [
@@ -83,14 +67,14 @@ async def tea_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ],
         [
             InlineKeyboardButton(f"{'✅ ' if 'feeling' in selected else ''}{options['feeling']}", callback_data="likes_feeling"),
-            InlineKeyboardButton(f"{'✅ ' if all_selected else ''}All", callback_data="likes_all"),
+            InlineKeyboardButton(f"{'✅ ' if all_selected else ''}ВСЁ", callback_data="likes_all"),
         ],
-        [InlineKeyboardButton("Done", callback_data="likes_done")],
+        [InlineKeyboardButton("Готово", callback_data="likes_done")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.message.reply_text("Что понравилось в чае больше всего? (Можете выбрать все пункты)", reply_markup=reply_markup)
-    return 5  # TEA_LIKES
+    await query.message.reply_text("Что понравилось  больше всего? ( Выберите 1 или несколько пунктов)", reply_markup=reply_markup)
+    return TEA_LIKES
 
 async def tea_likes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles likes selection (Tea category)."""
@@ -113,12 +97,12 @@ async def tea_likes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             if like in options:
                 selected.add(like)
     elif data == 'likes_done':
-        await query.edit_message_text("Selections saved. Please share your thoughts about the product.", reply_markup=None)
-        return 6  # TEA_REVIEW_TEXT
+        await query.edit_message_text("Отлично! А теперь напишите пару строк о товаре в произвольной форме", reply_markup=None)
+        return TEA_REVIEW_TEXT
 
     # Update buttons by editing the message
     all_selected = len(selected) == len(options)
-    keyboard_options = {'taste': 'Taste', 'aroma': 'Aroma', 'feeling': 'Feeling'}
+    keyboard_options = {'taste': 'ВКУС', 'aroma': 'АРОМАТ', 'feeling': 'ОЩУЩЕНИЕ О ЧАЯ'}
     keyboard = [
         [
             InlineKeyboardButton(f"{'✅ ' if 'taste' in selected else ''}{keyboard_options['taste']}", callback_data="likes_taste"),
@@ -126,21 +110,21 @@ async def tea_likes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ],
         [
             InlineKeyboardButton(f"{'✅ ' if 'feeling' in selected else ''}{keyboard_options['feeling']}", callback_data="likes_feeling"),
-            InlineKeyboardButton(f"{'✅ ' if all_selected else ''}All", callback_data="likes_all"),
+            InlineKeyboardButton(f"{'✅ ' if all_selected else ''}Все", callback_data="likes_all"),
         ],
-        [InlineKeyboardButton("Done", callback_data="likes_done")],
+        [InlineKeyboardButton("Готово", callback_data="likes_done")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
-        await query.edit_message_text("Что понравилось в чае больше всего? (Можете выбрать все пункты)", reply_markup=reply_markup)
+        await query.edit_message_text("Что понравилось  больше всего? ( Выберите 1 или несколько пунктов)", reply_markup=reply_markup)
     except Exception as e:
         if "Message is not modified" in str(e):
             pass  # Ignore if no change
         else:
             logging.getLogger(__name__).error(f"Error editing likes message: {e}")
 
-    return 5  # TEA_LIKES
+    return TEA_LIKES
 
 async def tea_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Stores the review text and appends the review to the list (Tea category)."""
@@ -167,11 +151,11 @@ async def tea_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Ask if want to add more
     keyboard = [
         [
-            InlineKeyboardButton("Да", callback_data="more_yes"),
-            InlineKeyboardButton("Нет", callback_data="more_no"),
+            InlineKeyboardButton("ДА", callback_data="more_yes"),
+            InlineKeyboardButton("НЕТ", callback_data="more_no"),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text("Спасибо за ваш отзыв. Хотите оценить доставку или сервис?", reply_markup=reply_markup)
-    return 1  # MORE_REVIEWS
+    await update.message.reply_text("Ваш отзыв сохранен и будет опубликован. Хотите еще оценить доставку или сервис?", reply_markup=reply_markup)
+    return MORE_REVIEWS

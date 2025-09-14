@@ -3,7 +3,7 @@ def escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 def format_tea_review(review_data: dict) -> str:
-    """Formats review for Tea category (includes Product)."""
+    """Formats review for Tea category (includes Product, Russian likes)."""
     category = review_data['category']
     product = escape_html(review_data.get('product', ''))
     rating = review_data['rating']
@@ -11,19 +11,20 @@ def format_tea_review(review_data: dict) -> str:
     review_text = escape_html(review_data['review_text'])
     category_tag = f"отзыв_{category}"
 
-    # Handle likes for Tea
+    # Handle likes for Tea (Russian)
     if set(likes_list) == {'taste', 'aroma', 'feeling'}:
-        likes = "All (Taste, Aroma, Feeling)"
+        likes = "Всё: (Вкус, Аромат, Ощущение от чая)"
     else:
-        likes = ', '.join([l.capitalize() for l in likes_list]) if likes_list else 'None'
+        likes_map = {'taste': 'Вкус', 'aroma': 'Аромат', 'feeling': 'Ощущение от чая'}
+        likes = ', '.join([likes_map.get(l, l.capitalize()) for l in likes_list]) if likes_list else 'None'
 
     message = (
-        f"📝 <b>New Review</b>\n\n"
-        f"<b>Category</b>: {category.capitalize()}\n"
-        f"<b>Product</b>: {product}\n"  # Only here for Tea
-        f"<b>Rating</b>: {'⭐' * rating}\n"
-        f"<b>Likes</b>: {likes}\n"
-        f"<b>Review</b>: {review_text}\n\n"
+        f"📝 <b>Новый отзыв</b>\n\n"
+        f"<b>Категория</b>: {category.capitalize()}\n"
+        f"<b>Чай</b>: {product}\n"
+        f"<b>Рэйтинг</b>: {'⭐' * rating}\n"
+        f"<b>Лучшие моменты</b>: {likes}\n"
+        f"<b>Отзыв</b>: {review_text}\n\n"
         f"#отзыв #{category_tag}"
     )
     return message
@@ -38,36 +39,42 @@ def format_service_review(review_data: dict) -> str:
 
     # Handle likes for Service (Russian)
     if set(likes_list) == {'quality', 'speed', 'professionalism'}:
-        likes = "All (Качество сервиса, Скорость обслуживания, Профессионализм)"
+        likes = "Всё (Качество сервиса, Скорость обслуживания, Профессионализм)"
     else:
         likes_map = {'quality': 'Качество сервиса', 'speed': 'Скорость обслуживания', 'professionalism': 'Профессионализм'}
         likes = ', '.join([likes_map.get(l, l.capitalize()) for l in likes_list]) if likes_list else 'None'
 
     message = (
-        f"📝 <b>New Review</b>\n\n"
-        f"<b>Category</b>: {category.capitalize()}\n"
-        f"<b>Rating</b>: {'⭐' * rating}\n"
-        f"<b>Likes</b>: {likes}\n"
-        f"<b>Review</b>: {review_text}\n\n"
+        f"📝 <b>Новый отзыв</b>\n\n"
+        f"<b>Категория</b>: {category.capitalize()}\n"
+        f"<b>Рэйтинг</b>: {'⭐' * rating}\n"
+        f"<b>Лучшие моменты</b>: {likes}\n"
+        f"<b>Отзыв</b>: {review_text}\n\n"
         f"#отзыв #{category_tag}"
     )
-    # No <b>Product</b> line here!
     return message
 
 def format_delivery_review(review_data: dict) -> str:
-    """Formats review for Delivery category (no Product; customizable)."""
+    """Formats review for Delivery category (no Product; Russian likes)."""
     category = review_data['category']
     rating = review_data['rating']
-    # No likes for delivery (add if needed later)
+    likes_list = review_data['likes']
     review_text = escape_html(review_data['review_text'])
     category_tag = f"отзыв_{category}"
 
+    # Handle likes for Delivery (Russian)
+    if set(likes_list) == {'speed', 'cost', 'courier'}:
+        likes = "Всё: (Скорость, Стоимость, Курьер - огонь)"
+    else:
+        likes_map = {'speed': 'Скорость', 'cost': 'Стоимость', 'courier': 'Курьер - огонь'}
+        likes = ', '.join([likes_map.get(l, l.capitalize()) for l in likes_list]) if likes_list else 'None'
+
     message = (
-        f"📝 <b>New Review</b>\n\n"
-        f"<b>Category</b>: {category.capitalize()}\n"
-        f"<b>Rating</b>: {'⭐' * rating}\n"
-        f"<b>Review</b>: {review_text}\n\n"
+        f"📝 <b>Новый отзыв</b>\n\n"
+        f"<b>Категория</b>: {category.capitalize()}\n"
+        f"<b>Рэйтинг</b>: {'⭐' * rating}\n"
+        f"<b>Лучшие моменты</b>: {likes}\n"
+        f"<b>Отзыв</b>: {review_text}\n\n"
         f"#отзыв #{category_tag}"
     )
-    # No <b>Product</b> line here!
     return message

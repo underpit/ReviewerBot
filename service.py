@@ -30,7 +30,7 @@ async def service_likes(update_or_query, context: ContextTypes.DEFAULT_TYPE) -> 
         ],
         [
             InlineKeyboardButton(f"{'✅ ' if 'professionalism' in selected else ''}{options['professionalism']}", callback_data="likes_professionalism"),
-            InlineKeyboardButton("Все", callback_data="likes_all"),
+            InlineKeyboardButton("ВСЁ", callback_data="likes_all"),
         ],
         [InlineKeyboardButton("Готово", callback_data="likes_done")],
     ]
@@ -139,11 +139,11 @@ async def service_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Ask if want to add more
     keyboard = [
         [
-            InlineKeyboardButton("Да", callback_data="more_yes"),
-            InlineKeyboardButton("Нет", callback_data="more_no"),
+            InlineKeyboardButton("ДА", callback_data="more_yes"),
+            InlineKeyboardButton("НЕТ", callback_data="more_no"),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text("Спасибо за ваш отзыв. Хотите оценить Чай или сервис?", reply_markup=reply_markup)
+    await update.message.reply_text("Ваш отзыв сохранен и будет опубликован. Хотите оценить еще что-то?	", reply_markup=reply_markup)
     return MORE_REVIEWS  # 1
