@@ -1,3 +1,5 @@
+
+
 def escape_html(text: str) -> str:
     """Escapes special characters for HTML parsing."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -22,7 +24,7 @@ def format_tea_review(review_data: dict) -> str:
         f"📝 <b>Новый отзыв</b>\n\n"
         f"<b>Категория</b>: {category.capitalize()}\n"
         f"<b>Чай</b>: {product}\n"
-        f"<b>Рэйтинг</b>: {'⭐' * rating}\n"
+        f"<b>Рейтинг</b>: {'⭐' * rating}\n"
         f"<b>Лучшие моменты</b>: {likes}\n"
         f"<b>Отзыв</b>: {review_text}\n\n"
         f"#отзыв #{category_tag}"
@@ -47,7 +49,7 @@ def format_service_review(review_data: dict) -> str:
     message = (
         f"📝 <b>Новый отзыв</b>\n\n"
         f"<b>Категория</b>: {category.capitalize()}\n"
-        f"<b>Рэйтинг</b>: {'⭐' * rating}\n"
+        f"<b>Рeйтинг</b>: {'⭐' * rating}\n"
         f"<b>Лучшие моменты</b>: {likes}\n"
         f"<b>Отзыв</b>: {review_text}\n\n"
         f"#отзыв #{category_tag}"
@@ -72,7 +74,7 @@ def format_delivery_review(review_data: dict) -> str:
     message = (
         f"📝 <b>Новый отзыв</b>\n\n"
         f"<b>Категория</b>: {category.capitalize()}\n"
-        f"<b>Рэйтинг</b>: {'⭐' * rating}\n"
+        f"<b>Рeйтинг</b>: {'⭐' * rating}\n"
         f"<b>Лучшие моменты</b>: {likes}\n"
         f"<b>Отзыв</b>: {review_text}\n\n"
         f"#отзыв #{category_tag}"

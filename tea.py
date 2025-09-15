@@ -1,11 +1,13 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from form import format_tea_review 
 
 # Hardcode state numbers (no import from main to avoid cycle)
 TEA_PHOTO = 3
 TEA_RATING = 4
 TEA_LIKES = 5
 TEA_REVIEW_TEXT = 6
+PREVIEW = 13
 MORE_REVIEWS = 1  # Hardcode for return after review
 
 async def tea_product(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -97,8 +99,27 @@ async def tea_likes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             if like in options:
                 selected.add(like)
     elif data == 'likes_done':
-        await query.edit_message_text("Отлично! А теперь напишите пару строк о товаре в произвольной форме", reply_markup=None)
-        return TEA_REVIEW_TEXT
+        editing = context.user_data.get('editing', False)
+        if editing:
+            pending_data = context.user_data.get('pending_data', {})
+            pending_data['likes'] = list(selected)
+            context.user_data['pending_data'] = pending_data
+
+            formatted = format_tea_review(pending_data)
+            keyboard = [
+                [
+                    InlineKeyboardButton("Подтвердить", callback_data="confirm"),
+                    InlineKeyboardButton("Изменить", callback_data="edit"),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await query.edit_message_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted}", reply_markup=reply_markup)
+            context.user_data.pop('editing', None)  
+            return 13  # PREVIEW
+        else:
+            await query.edit_message_text("Отлично! А теперь напишите пару строк о товаре в произвольной форме", reply_markup=None)
+            return 6  # TEA_REVIEW_TEXT
 
     # Update buttons by editing the message
     all_selected = len(selected) == len(options)
@@ -127,11 +148,11 @@ async def tea_likes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return TEA_LIKES
 
 async def tea_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Stores the review text and appends the review to the list (Tea category)."""
+    """Stores the review text and shows preview (Tea category)."""
     context.user_data['current_review_text'] = update.message.text
 
-    # Append current review to reviews list
-    review = {
+    # Prepare review data for preview
+    review_data = {
         'category': context.user_data['current_category'],
         'product': context.user_data.get('current_product', ''),
         'photo': context.user_data.get('current_photo', None),
@@ -139,23 +160,31 @@ async def tea_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         'likes': list(context.user_data.get('current_likes', set())),
         'review_text': context.user_data['current_review_text'],
     }
-    context.user_data['reviews'].append(review)
 
-    # Clear current data
+    # Format for preview
+    formatted_review = format_tea_review(review_data)
+
+    # Show preview with buttons (plain text, no parse_mode)
+    keyboard = [
+        [
+            InlineKeyboardButton("Подтвердить", callback_data="confirm"),
+            InlineKeyboardButton("Изменить", callback_data="edit"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Paste the preview text here
+    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted_review}", reply_markup=reply_markup)
+
+    # Store pending review for confirmation
+    context.user_data['pending_data'] = review_data.copy()
+    context.user_data['pending_review'] = review_data.copy()
+
+    # Clear current data (keep pending for confirm)
     context.user_data.pop('current_product', None)
     context.user_data.pop('current_photo', None)
     context.user_data.pop('current_rating', None)
     context.user_data.pop('current_likes', None)
     context.user_data.pop('current_review_text', None)
 
-    # Ask if want to add more
-    keyboard = [
-        [
-            InlineKeyboardButton("ДА", callback_data="more_yes"),
-            InlineKeyboardButton("НЕТ", callback_data="more_no"),
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text("Ваш отзыв сохранен и будет опубликован. Хотите еще оценить доставку или сервис?", reply_markup=reply_markup)
-    return MORE_REVIEWS
+    return 13  # PREVIEW

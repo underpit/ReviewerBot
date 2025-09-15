@@ -1,5 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from form import format_service_review
 
 # Hardcode state numbers (no import from main to avoid cycle)
 SERVICE_LIKES = 7
@@ -60,23 +61,43 @@ async def service_likes_handler(update: Update, context: ContextTypes.DEFAULT_TY
             if like in options:
                 selected.add(like)
     elif data == 'likes_done':
-        # Proceed to rating
-        await query.edit_message_text("Отлично! Оцените наш сервис по шкале", reply_markup=None)
+        editing = context.user_data.get('editing', False)
+        if editing:
+            # MARK: Editing mode - update pending_data and rebuild preview
+            pending_data = context.user_data.get('pending_data', {})
+            pending_data['likes'] = list(selected)
+            context.user_data['pending_data'] = pending_data
 
-        # Show rating buttons
-        keyboard = [
-            [
-                InlineKeyboardButton("1", callback_data="rate_1"),
-                InlineKeyboardButton("2", callback_data="rate_2"),
-                InlineKeyboardButton("3", callback_data="rate_3"),
-                InlineKeyboardButton("4", callback_data="rate_4"),
-                InlineKeyboardButton("5", callback_data="rate_5"),
+            formatted = format_service_review(pending_data)
+            keyboard = [
+                [
+                    InlineKeyboardButton("Подтвердить", callback_data="confirm"),
+                    InlineKeyboardButton("Изменить", callback_data="edit"),
+                ]
             ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+            reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.message.reply_text("Отлично! Оцените наш сервис по шкале", reply_markup=reply_markup)
-        return SERVICE_RATING
+            await query.edit_message_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted}", reply_markup=reply_markup)
+            context.user_data.pop('editing', None)  # Clear flag
+            return 13  # PREVIEW
+        # Proceed to rating
+        else: 
+            await query.edit_message_text("Отлично! Оцените наш сервис по шкале", reply_markup=None)
+
+            # Show rating buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("1", callback_data="rate_1"),
+                    InlineKeyboardButton("2", callback_data="rate_2"),
+                    InlineKeyboardButton("3", callback_data="rate_3"),
+                    InlineKeyboardButton("4", callback_data="rate_4"),
+                    InlineKeyboardButton("5", callback_data="rate_5"),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await query.message.reply_text("Отлично! Оцените наш сервис по шкале", reply_markup=reply_markup)
+            return SERVICE_RATING
 
     # Update buttons
     all_selected = len(selected) == len(options)
@@ -117,11 +138,11 @@ async def service_rating_handler(update: Update, context: ContextTypes.DEFAULT_T
     return SERVICE_REVIEW_TEXT
 
 async def service_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Stores the review text and appends the review to the list (Service category)."""
+    """Stores the review text and shows preview (Service category)."""
     context.user_data['current_review_text'] = update.message.text
 
-    # Append current review to reviews list
-    review = {
+    # Prepare review data for preview
+    review_data = {
         'category': context.user_data['current_category'],
         'product': '',  # No product for service
         'photo': None,  # No photo for service
@@ -129,21 +150,28 @@ async def service_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE
         'likes': list(context.user_data.get('current_likes', [])),
         'review_text': context.user_data['current_review_text'],
     }
-    context.user_data['reviews'].append(review)
 
-    # Clear current data
-    context.user_data.pop('current_rating', None)
-    context.user_data.pop('current_likes', None)
-    context.user_data.pop('current_review_text', None)
+    # Format for preview
+    formatted_review = format_service_review(review_data)
 
-    # Ask if want to add more
+    # Show preview with buttons
     keyboard = [
         [
-            InlineKeyboardButton("ДА", callback_data="more_yes"),
-            InlineKeyboardButton("НЕТ", callback_data="more_no"),
+            InlineKeyboardButton("Подтвердить", callback_data="confirm"),
+            InlineKeyboardButton("Изменить", callback_data="edit"),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text("Ваш отзыв сохранен и будет опубликован. Хотите оценить еще что-то?	", reply_markup=reply_markup)
-    return MORE_REVIEWS  # 1
+    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted_review}", reply_markup=reply_markup)
+
+    # Store pending review for confirmation
+    context.user_data['pending_data'] = review_data.copy()
+    context.user_data['pending_review'] = review_data.copy()
+
+    # Clear current data (keep pending for confirm)
+    context.user_data.pop('current_rating', None)
+    context.user_data.pop('current_likes', None)
+    context.user_data.pop('current_review_text', None)
+
+    return 13 # PREVIEW
