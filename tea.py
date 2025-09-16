@@ -114,11 +114,11 @@ async def tea_likes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await query.edit_message_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted}", reply_markup=reply_markup)
+            await query.edit_message_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML") 
             context.user_data.pop('editing', None)  
             return 13  # PREVIEW
         else:
-            await query.edit_message_text("Отлично! А теперь напишите пару строк о товаре в произвольной форме", reply_markup=None)
+            await query.edit_message_text("Отлично! А теперь напишите пару строк в произвольной форме", reply_markup=None)
             return 6  # TEA_REVIEW_TEXT
 
     # Update buttons by editing the message
@@ -174,7 +174,7 @@ async def tea_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     # Paste the preview text here
-    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted_review}", reply_markup=reply_markup)
+    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted_review}", reply_markup=reply_markup, parse_mode="HTML")
 
     # Store pending review for confirmation
     context.user_data['pending_data'] = review_data.copy()

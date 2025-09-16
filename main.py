@@ -90,7 +90,7 @@ async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text("На что пишем отзыв?:", reply_markup=reply_markup)
+    await update.message.reply_text("На что пишем отзыв?", reply_markup=reply_markup)
     return CATEGORY
 
 async def category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -121,11 +121,10 @@ async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     data = query.data
 
     if data == 'confirm':
-        # Append the pending review (stored in user_data during preview)
-        pending_review = context.user_data.pop('pending_review', None)
-        if pending_review:
-            context.user_data['reviews'].append(pending_review)
-        context.user_data.pop('editing', None)
+        pending_data = context.user_data.pop('pending_data', None)
+        if pending_data:
+            context.user_data['reviews'].append(pending_data)
+        context.user_data.pop('pending_review', None)  # Clean up old
         await query.edit_message_text("Отзыв подтвержден!")
 
         # Proceed to more reviews
@@ -145,15 +144,15 @@ async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         keyboard = []
         if category == 'чай':
             keyboard = [
-                [InlineKeyboardButton("Чай (название продукта)", callback_data="edit_product")],
-                [InlineKeyboardButton("Рейтинг", callback_data="edit_rating")],
-                [InlineKeyboardButton("Нравится", callback_data="edit_likes")],
+                [InlineKeyboardButton("Название чая", callback_data="edit_product")],
+                [InlineKeyboardButton("Оценка", callback_data="edit_rating")],
+                [InlineKeyboardButton("Органолептика", callback_data="edit_likes")],
                 [InlineKeyboardButton("Отзыв", callback_data="edit_review")],
             ]
         else:  # Service/Delivery (no product)
             keyboard = [
-                [InlineKeyboardButton("Рейтинг", callback_data="edit_rating")],
-                [InlineKeyboardButton("Нравится", callback_data="edit_likes")],
+                [InlineKeyboardButton("Оценка", callback_data="edit_rating")],
+                [InlineKeyboardButton("Лучшие моменты", callback_data="edit_likes")],
                 [InlineKeyboardButton("Отзыв", callback_data="edit_review")],
             ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -232,7 +231,7 @@ async def edit_product_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой:\n\n{formatted}", reply_markup=reply_markup)
+    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML")
     return PREVIEW
 
 async def edit_review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -262,7 +261,7 @@ async def edit_review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой:\n\n{formatted}", reply_markup=reply_markup)
+    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML")
     logger.info(f"Edit review completed for {category}, new text: {new_review[:50]}...")  # MARK: Add logging to confirm handler fires
     return PREVIEW
 
@@ -315,7 +314,7 @@ async def edit_rating_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой:\n\n{formatted}", reply_markup=reply_markup)
+    await query.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой:\n\n{formatted}", reply_markup=reply_markup, parce_mode="HTML")
     return PREVIEW
 
 async def more_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -335,7 +334,7 @@ async def more_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text("На что пишем отзыв?:", reply_markup=reply_markup)
+        await query.message.reply_text("На что пишем отзыв?", reply_markup=reply_markup)
         return CATEGORY
     elif data == 'more_no':
         try:
@@ -344,7 +343,8 @@ async def more_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             await post_reviews(update, context)
 
             # Thank you message
-            await query.message.reply_text("Благодарим за отзыв! Вот вам промо-код на следующую покупку чая")
+            thank_msg = "Спасибо за искренний отзыв! Все отзывы публикуются в нашем канале @chayniy_ohotnik"
+            await query.message.reply_text(thank_msg)
 
             # Separate promo message from JSON
             promo_text = ""

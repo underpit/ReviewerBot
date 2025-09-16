@@ -22,7 +22,7 @@ async def service_likes(update_or_query, context: ContextTypes.DEFAULT_TYPE) -> 
 
     selected = set()
     context.user_data['current_likes'] = selected
-    options = {'quality': 'КАЧЕСТВО СЕРВИСА', 'speed': 'СКОРОСТЬ ОБСЛУЖИВАНИЯ', 'professionalism': 'ПРОФЕССИОНАЛИЗМ'}
+    options = {'quality': 'КАЧЕСТВО', 'speed': 'СКОРОСТЬ', 'professionalism': 'ПРОФЕССИОНАЛИЗМ'}
 
     keyboard = [
         [
@@ -77,7 +77,7 @@ async def service_likes_handler(update: Update, context: ContextTypes.DEFAULT_TY
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await query.edit_message_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted}", reply_markup=reply_markup)
+            await query.edit_message_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML")
             context.user_data.pop('editing', None)  # Clear flag
             return 13  # PREVIEW
         # Proceed to rating
@@ -101,7 +101,7 @@ async def service_likes_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Update buttons
     all_selected = len(selected) == len(options)
-    keyboard_options = {'quality': 'КАЧЕСТВО СЕРВИСА', 'speed': 'СКОРОСТЬ ОБСЛУЖИВАНИЯ', 'professionalism': 'ПРОФЕССИОНАЛИЗМ'}
+    keyboard_options = {'quality': 'КАЧЕСТВО', 'speed': 'СКОРОСТЬ', 'professionalism': 'ПРОФЕССИОНАЛИЗМ'}
     keyboard = [
         [
             InlineKeyboardButton(f"{'✅ ' if 'quality' in selected else ''}{keyboard_options['quality']}", callback_data="likes_quality"),
@@ -109,7 +109,7 @@ async def service_likes_handler(update: Update, context: ContextTypes.DEFAULT_TY
         ],
         [
             InlineKeyboardButton(f"{'✅ ' if 'professionalism' in selected else ''}{keyboard_options['professionalism']}", callback_data="likes_professionalism"),
-            InlineKeyboardButton(f"{'✅ ' if all_selected else ''}Все", callback_data="likes_all"),
+            InlineKeyboardButton(f"{'✅ ' if all_selected else ''}ВСЁ", callback_data="likes_all"),
         ],
         [InlineKeyboardButton("Готово", callback_data="likes_done")],
     ]
@@ -134,7 +134,7 @@ async def service_rating_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     await query.edit_message_text(f"Оценка выбрана: {rating} ({'⭐' * rating})")
 
-    await query.message.reply_text("Отлично! А теперь напишите пару строк о товаре в произвольной форме")
+    await query.message.reply_text("Отлично! А теперь напишите пару строк в произвольной форме")
     return SERVICE_REVIEW_TEXT
 
 async def service_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -163,7 +163,7 @@ async def service_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted_review}", reply_markup=reply_markup)
+    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted_review}", reply_markup=reply_markup, parse_mode="HTML")
 
     # Store pending review for confirmation
     context.user_data['pending_data'] = review_data.copy()

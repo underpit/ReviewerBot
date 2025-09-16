@@ -23,7 +23,7 @@ async def delivery_likes(update_or_query, context: ContextTypes.DEFAULT_TYPE) ->
 
     selected = set()
     context.user_data['current_likes'] = selected
-    options = {'speed': 'СКОРОСТЬ', 'cost': 'СТОИМОСТЬ', 'courier': 'КУРЬЕР - ОГОНЬ'}
+    options = {'speed': 'СКОРОСТЬ', 'cost': 'СТОИМОСТЬ', 'courier': 'КУРЬЕР - 🔥'}
 
     keyboard = [
         [
@@ -64,10 +64,11 @@ async def delivery_likes_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data == 'likes_done':
         editing = context.user_data.get('editing', False)
         if editing:
-            # MARK: Editing mode - update pending_data and rebuild preview
+            # MARK: Editing mode - update pending_data with new likes and sync pending_review
             pending_data = context.user_data.get('pending_data', {})
-            pending_data['likes'] = list(selected)
+            pending_data['likes'] = list(selected)  # Save new selected likes
             context.user_data['pending_data'] = pending_data
+            context.user_data['pending_review'] = pending_data.copy()  # Sync for post
 
             formatted = format_delivery_review(pending_data)
             keyboard = [
@@ -83,7 +84,6 @@ async def delivery_likes_handler(update: Update, context: ContextTypes.DEFAULT_T
             return 13  # PREVIEW
         else:
             # MARK: Normal flow - proceed to rating (your existing lines)
-            await query.edit_message_text("Отлично! Оцените доставку по шкале", reply_markup=None)
 
             # Show rating buttons
             keyboard = [
@@ -102,7 +102,7 @@ async def delivery_likes_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # Update buttons
     all_selected = len(selected) == len(options)
-    keyboard_options = {'speed': 'СКОРОСТЬ', 'cost': 'СТОИМОСТЬ', 'courier': 'КУРЬЕР - ОГОНЬ'}
+    keyboard_options = {'speed': 'СКОРОСТЬ', 'cost': 'СТОИМОСТЬ', 'courier': 'КУРЬЕР - 🔥'}
     keyboard = [
         [
             InlineKeyboardButton(f"{'✅ ' if 'speed' in selected else ''}{keyboard_options['speed']}", callback_data="likes_speed"),
@@ -135,7 +135,7 @@ async def delivery_rating_handler(update: Update, context: ContextTypes.DEFAULT_
 
     await query.edit_message_text(f"Оценка выбрана: {rating} ({'⭐' * rating})")
 
-    await query.message.reply_text("Отлично! А теперь напишите пару строк о товаре в произвольной форме")
+    await query.message.reply_text("Отлично! А теперь напишите пару строк в произвольной форме")
     return 12 # DELIVERY_REVIEW_TEXT
 
 async def delivery_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -164,12 +164,11 @@ async def delivery_review_text(update: Update, context: ContextTypes.DEFAULT_TYP
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted_review}", reply_markup=reply_markup)
+    await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted_review}", reply_markup=reply_markup, parse_mode="HTML")
 
     # MARK: Store pending data for edits (copy to ensure delivery-specific fields)
     context.user_data['pending_data'] = review_data.copy()
     context.user_data['pending_review'] = review_data.copy()
-
     # Clear current data (keep pending for confirm/edit)
     context.user_data.pop('current_rating', None)
     context.user_data.pop('current_likes', None)

@@ -66,9 +66,9 @@ def format_delivery_review(review_data: dict) -> str:
 
     # Handle likes for Delivery (Russian)
     if set(likes_list) == {'speed', 'cost', 'courier'}:
-        likes = "Всё: (Скорость, Стоимость, Курьер - огонь)"
+        likes = "Всё: (Скорость, Стоимость, Курьер - 🔥)"
     else:
-        likes_map = {'speed': 'Скорость', 'cost': 'Стоимость', 'courier': 'Курьер - огонь'}
+        likes_map = {'speed': 'Скорость', 'cost': 'Стоимость', 'courier': 'Курьер - 🔥'}
         likes = ', '.join([likes_map.get(l, l.capitalize()) for l in likes_list]) if likes_list else 'None'
 
     message = (
