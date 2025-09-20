@@ -354,8 +354,16 @@ async def more_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             thank_msg = "Спасибо за искренний отзыв! Все отзывы публикуются в нашем канале @chayniy_ohotnik"
             await query.message.reply_text(thank_msg)
             # Separate promo message from JSON
-            if PROMO_TEXT:
-                await query.message.reply_text(PROMO_TEXT)
+            promo_text = ""
+            try:
+                with open('promo.json', 'r', encoding='utf-8') as f:
+                    promo = json.load(f)
+                    promo_text = f"{promo.get('text', '')} Промокод: {promo.get('code', '')}"
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                logger.error(f"Promo JSON error: {e}")
+
+            if promo_text:
+                await query.message.reply_text(promo_text)
         except Exception as e:
             logger.error(f"Error in posting reviews: {e}")
             await query.message.reply_text("Извините, произошла ошибка при публикации отзывов. Попробуйте позже.")
