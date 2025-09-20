@@ -1,4 +1,6 @@
 import logging
+import json
+from enum import IntEnum
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -29,39 +31,57 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# All states defined here to avoid circular imports
-CATEGORY = 0
-MORE_REVIEWS = 1
-
-# Tea states
-TEA_PRODUCT = 2
-TEA_PHOTO = 3
-TEA_RATING = 4
-TEA_LIKES = 5
-TEA_REVIEW_TEXT = 6
-
-# Service states (new flow)
-SERVICE_LIKES = 7
-SERVICE_RATING = 8
-SERVICE_REVIEW_TEXT = 9
-
-# Delivery states (new flow)
-DELIVERY_LIKES = 10
-DELIVERY_RATING = 11
-DELIVERY_REVIEW_TEXT = 12
-# Common preview state
-PREVIEW = 13
-# Edit states
-EDIT_MENU = 14
-EDIT_RATING = 15
-EDIT_LIKES = 16
-EDIT_PRODUCT = 17
-EDIT_REVIEW = 18
-
-# Replace with your bot token and channel ID
-import json ; bot_config = json.load(open("bot_config.json")) 
-CHANNEL_ID = bot_config["channel_id"]
+# Cached bot_config (load once)
+try:
+    with open("bot_config.json", "r", encoding="utf-8") as f:
+        bot_config = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError) as e:
+    logger.error(f"Bot config error: {e}")
+    bot_config = {"telegram_bot_token": "fallback_token", "channel_id": "@fallback_channel"}
 BOT_TOKEN = bot_config["telegram_bot_token"]
+CHANNEL_ID = bot_config["channel_id"]
+
+# States as IntEnum for readability and faster lookups
+class States(IntEnum):
+    CATEGORY = 0
+    MORE_REVIEWS = 1
+    TEA_PRODUCT = 2
+    TEA_PHOTO = 3
+    TEA_RATING = 4
+    TEA_LIKES = 5
+    TEA_REVIEW_TEXT = 6
+    SERVICE_LIKES = 7
+    SERVICE_RATING = 8
+    SERVICE_REVIEW_TEXT = 9
+    DELIVERY_LIKES = 10
+    DELIVERY_RATING = 11
+    DELIVERY_REVIEW_TEXT = 12
+    PREVIEW = 13
+    EDIT_MENU = 14
+    EDIT_RATING = 15
+    EDIT_LIKES = 16
+    EDIT_PRODUCT = 17
+    EDIT_REVIEW = 18
+
+# Common rating keyboard (optimized, used in all rating handlers)
+def get_rating_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton("1", callback_data="rate_1"),
+            InlineKeyboardButton("2", callback_data="rate_2"),
+            InlineKeyboardButton("3", callback_data="rate_3"),
+            InlineKeyboardButton("4", callback_data="rate_4"),
+            InlineKeyboardButton("5", callback_data="rate_5"),
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# Category routing dict (unchanged)
+CATEGORY_ROUTING = {
+    'чай': {'product': tea_product, 'likes_state': States.TEA_LIKES, 'rating_state': States.TEA_RATING, 'review_state': States.TEA_REVIEW_TEXT, 'format': format_tea_review, 'has_product': True},
+    'сервис': {'product': None, 'likes_state': States.SERVICE_LIKES, 'rating_state': States.SERVICE_RATING, 'review_state': States.SERVICE_REVIEW_TEXT, 'format': format_service_review, 'has_product': False},
+    'доставка': {'product': None, 'likes_state': States.DELIVERY_LIKES, 'rating_state': States.DELIVERY_RATING, 'review_state': States.DELIVERY_REVIEW_TEXT, 'format': format_delivery_review, 'has_product': False},
+}
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles /start command, shows button to start review."""
@@ -91,29 +111,33 @@ async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text("На что пишем отзыв?", reply_markup=reply_markup)
-    return CATEGORY
+    return States.CATEGORY
 
 async def category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles category selection and routes to category-specific starting state."""
+    """Handles category selection and routes using dict."""
     query = update.callback_query
     await query.answer()
     selected_category = query.data
     context.user_data['current_category'] = selected_category
+    routing = CATEGORY_ROUTING.get(selected_category, {})
 
-    if selected_category == 'чай':
-        await query.edit_message_text("Выбранная категория: ЧАЙ	\n\nВведите название продукта:")
-        return TEA_PRODUCT
-    elif selected_category == 'сервис':
-        await query.edit_message_text("Выбранная категория: Сервис")
-        # Explicitly start service flow by calling initial likes function
-        await service_likes(query, context)
-        return SERVICE_LIKES
-    elif selected_category == 'доставка':
-        await query.edit_message_text("Выбранная категория: Доставка")
-        # Explicitly start delivery flow by calling initial likes function
-        await delivery_likes(query, context)
-        return DELIVERY_LIKES
-    
+    if not routing:
+        await query.edit_message_text("Unknown category.")
+        return ConversationHandler.END
+
+    if routing['has_product']:
+        await query.edit_message_text(f"Выбранная категория: {selected_category.upper()} \n\nВведите название продукта:")
+        return States.TEA_PRODUCT  # Tea has product
+    else:
+        # No product - start likes
+        await query.edit_message_text(f"Выбранная категория: {selected_category.capitalize()}")
+        if routing.get('likes_state'):
+            if selected_category == 'сервис':
+                await service_likes(query, context)
+            elif selected_category == 'доставка':
+                await delivery_likes(query, context)
+        return routing['likes_state']
+
 async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles preview buttons (confirm or edit)."""
     query = update.callback_query
@@ -121,6 +145,7 @@ async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     data = query.data
 
     if data == 'confirm':
+        # Append from latest pending_data (includes edits)
         pending_data = context.user_data.pop('pending_data', None)
         if pending_data:
             context.user_data['reviews'].append(pending_data)
@@ -136,20 +161,25 @@ async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.message.reply_text("Спасибо за ваш отзыв. Хотите оценить доставку или сервис?", reply_markup=reply_markup)
-        return MORE_REVIEWS
+        await query.message.reply_text("Хотите оценить что-то еще?", reply_markup=reply_markup)
+        return States.MORE_REVIEWS
     elif data == 'edit':
+        # Restore pending_data from pending_review for edits
+        pending_review = context.user_data.get('pending_review', {})
+        context.user_data['pending_data'] = pending_review.copy()  # Ensure defined
+
         # Show edit menu based on category
         category = context.user_data.get('current_category', '')
         keyboard = []
-        if category == 'чай':
+        routing = CATEGORY_ROUTING.get(category, {})
+        if routing.get('has_product', False):
             keyboard = [
                 [InlineKeyboardButton("Название чая", callback_data="edit_product")],
                 [InlineKeyboardButton("Оценка", callback_data="edit_rating")],
                 [InlineKeyboardButton("Органолептика", callback_data="edit_likes")],
                 [InlineKeyboardButton("Отзыв", callback_data="edit_review")],
             ]
-        else:  # Service/Delivery (no product)
+        else:
             keyboard = [
                 [InlineKeyboardButton("Оценка", callback_data="edit_rating")],
                 [InlineKeyboardButton("Лучшие моменты", callback_data="edit_likes")],
@@ -157,7 +187,8 @@ async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("Что вы хотели изменить?", reply_markup=reply_markup)
-        return EDIT_MENU
+        return States.EDIT_MENU
+
 async def edit_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles edit menu selection."""
     query = update.callback_query
@@ -168,23 +199,14 @@ async def edit_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if data == 'edit_product':
         # Only for tea
         await query.edit_message_text("Введите название продукта заново.")
-        return EDIT_PRODUCT
+        return States.EDIT_PRODUCT
     elif data == 'edit_rating':
         # Show rating buttons again
-        keyboard = [
-            [
-                InlineKeyboardButton("1 ", callback_data="rate_1"),
-                InlineKeyboardButton("2 ", callback_data="rate_2"),
-                InlineKeyboardButton("3 ", callback_data="rate_3"),
-                InlineKeyboardButton("4 ", callback_data="rate_4"),
-                InlineKeyboardButton("5 ", callback_data="rate_5"),
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = get_rating_keyboard()
         await query.message.reply_text("Выберите рейтинг заново.", reply_markup=reply_markup)
-        return EDIT_RATING
+        return States.EDIT_RATING
     elif data == 'edit_likes':
-    # Set editing flag
+        # Set editing flag
         context.user_data['editing'] = True
         # Restore current_likes from pending_data
         pending_data = context.user_data.get('pending_data', {})
@@ -192,37 +214,31 @@ async def edit_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         # Call category likes with full update
         if category == 'чай':
             await tea_likes(update, context)  # Pass update
-            return TEA_LIKES
+            return States.TEA_LIKES
         elif category == 'сервис':
             await service_likes_handler(update, context)  # Pass update
-            return SERVICE_LIKES
+            return States.SERVICE_LIKES
         elif category == 'доставка':
             await delivery_likes_handler(update, context)  # Pass update
-            return DELIVERY_LIKES
+            return States.DELIVERY_LIKES
     elif data == 'edit_review':
         await query.edit_message_text("Напишите отзыв заново.")
-        return EDIT_REVIEW
-    elif data == 'edit_review':
-        await query.edit_message_text("Напишите отзыв заново (для доставки).")  # MARK: Clear prompt for delivery
-        return EDIT_REVIEW
+        return States.EDIT_REVIEW
 
-    return PREVIEW
+    return States.PREVIEW
 
 async def edit_product_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles editing product name (Tea only)."""
-    context.user_data['current_product'] = update.message.text  # Update pending
+    new_product = update.message.text
+    pending_data = context.user_data.get('pending_data', {})
+    pending_data['product'] = new_product
+    context.user_data['pending_data'] = pending_data  # Save back
     await update.message.reply_text("Название продукта обновлено. Возвращаемся к предпросмотру.")
 
     # Rebuild preview
     category = context.user_data.get('current_category', '')
-    pending_data = context.user_data.get('pending_data', {})
-    pending_data['product'] = context.user_data['current_product']
-    context.user_data['pending_data'] = pending_data
-
     if category == 'чай':
         formatted = format_tea_review(pending_data)
-    # ... (similar for other categories if needed)
-
     keyboard = [
         [
             InlineKeyboardButton("Подтвердить", callback_data="confirm"),
@@ -230,9 +246,8 @@ async def edit_product_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML")
-    return PREVIEW
+    return States.PREVIEW
 
 async def edit_review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles editing review text (common)."""
@@ -260,10 +275,8 @@ async def edit_review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML")
-    logger.info(f"Edit review completed for {category}, new text: {new_review[:50]}...")  # MARK: Add logging to confirm handler fires
-    return PREVIEW
+    return States.PREVIEW
 
 async def edit_likes_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles editing likes (reuses category likes)."""
@@ -271,32 +284,29 @@ async def edit_likes_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     category = context.user_data.get('current_category', '')
     if category == 'чай':
-        await tea_likes(query, context)
-        return TEA_LIKES
+        await tea_likes(update, context)
+        return States.TEA_LIKES
     elif category == 'сервис':
         await service_likes_handler(update, context)
-        return SERVICE_LIKES
+        return States.SERVICE_LIKES
     elif category == 'доставка':
         await delivery_likes_handler(update, context)
-        return DELIVERY_LIKES
-    return PREVIEW
+        return States.DELIVERY_LIKES
+    return States.PREVIEW
 
 async def edit_rating_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles re-rating after edit."""
     query = update.callback_query
     await query.answer()
     rating = int(query.data.split('_')[1])
-    context.user_data['current_rating'] = rating  # Update pending data
+    pending_data = context.user_data.get('pending_data', {})
+    pending_data['rating'] = rating
+    context.user_data['pending_data'] = pending_data  # Save back
 
-    # Back to preview
     await query.edit_message_text(f"Рейтинг обновлен: {rating} ({'⭐' * rating})")
 
-    # Rebuild and show preview (reuse logic from review_text)
+    # Rebuild preview
     category = context.user_data.get('current_category', '')
-    pending_data = context.user_data.get('pending_data', {})  # Assume stored
-    pending_data['rating'] = rating
-    context.user_data['pending_data'] = pending_data
-
     if category == 'чай':
         formatted = format_tea_review(pending_data)
     elif category == 'сервис':
@@ -313,9 +323,8 @@ async def edit_rating_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await query.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой:\n\n{formatted}", reply_markup=reply_markup, parce_mode="HTML")
-    return PREVIEW
+    await query.message.reply_text(f"Вот ваш комментарий, проверьте перед отправкой:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML")
+    return States.PREVIEW
 
 async def more_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles whether to add more reviews."""
@@ -324,7 +333,7 @@ async def more_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     data = query.data
 
     if data == 'more_yes':
-        await query.edit_message_text("Хорошо! Вы можете оставить еще один отзыв.")
+        await query.edit_message_text("Отлично! Давайте начнем новый отзыв.")
         # Back to category selection
         keyboard = [
             [
@@ -335,31 +344,21 @@ async def more_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.reply_text("На что пишем отзыв?", reply_markup=reply_markup)
-        return CATEGORY
+        return States.CATEGORY
     elif data == 'more_no':
         try:
             await query.edit_message_text("Спасибо! Отправляем все отзывы в канал.")
             # Post all reviews
             await post_reviews(update, context)
-
             # Thank you message
             thank_msg = "Спасибо за искренний отзыв! Все отзывы публикуются в нашем канале @chayniy_ohotnik"
             await query.message.reply_text(thank_msg)
-
             # Separate promo message from JSON
-            promo_text = ""
-            try:
-                with open('promo.json', 'r', encoding='utf-8') as f:
-                    promo = json.load(f)
-                    promo_text = f"{promo.get('text', '')} Промокод: {promo.get('code', '')}"
-            except (FileNotFoundError, json.JSONDecodeError) as e:
-                logger.error(f"Promo JSON error: {e}")
-
-            if promo_text:
-                await query.message.reply_text(promo_text)
+            if PROMO_TEXT:
+                await query.message.reply_text(PROMO_TEXT)
         except Exception as e:
-            logger.error(f"Ошибка в отправке отзыва {e}")
-            await query.message.reply_text("Извините, произошла ошибка при публикации отзывов. Пожалуйста, попробуйте позже.")
+            logger.error(f"Error in posting reviews: {e}")
+            await query.message.reply_text("Извините, произошла ошибка при публикации отзывов. Попробуйте позже.")
         finally:
             # Clear data
             context.user_data.clear()
@@ -371,7 +370,6 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     for review in reviews:
         category = review['category']
         photo = review.get('photo')
-
         # Get formatted message based on category
         if category == 'чай':
             message = format_tea_review(review)
@@ -382,7 +380,6 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             # Fallback
             message = "Неизвестная отзыва."
-
         try:
             if photo:
                 await context.bot.send_photo(chat_id=CHANNEL_ID, photo=photo, caption=message, parse_mode="HTML")
@@ -415,33 +412,34 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("Оставить отзыв"), start_review)],
         states={
-            CATEGORY: [CallbackQueryHandler(category)],
+            States.CATEGORY: [CallbackQueryHandler(category)],
             # Tea states
-            TEA_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tea_product)],
-            TEA_PHOTO: [
+            States.TEA_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tea_product)],
+            States.TEA_PHOTO: [
                 MessageHandler(filters.PHOTO, tea_photo),
                 MessageHandler(filters.ALL & ~filters.PHOTO & ~filters.COMMAND, tea_photo_reprompt),  # Reprompt for non-photo
             ],
-            TEA_RATING: [CallbackQueryHandler(tea_rating, pattern="^rate_")],
-            TEA_LIKES: [CallbackQueryHandler(tea_likes, pattern="^likes_")],
-            TEA_REVIEW_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tea_review_text)],
+            States.TEA_RATING: [CallbackQueryHandler(tea_rating, pattern="^rate_")],
+            States.TEA_LIKES: [CallbackQueryHandler(tea_likes, pattern="^likes_")],
+            States.TEA_REVIEW_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tea_review_text)],
             # Service states (new flow)
-            SERVICE_LIKES: [CallbackQueryHandler(service_likes_handler, pattern="^likes_")],
-            SERVICE_RATING: [CallbackQueryHandler(service_rating_handler, pattern="^rate_")],
-            SERVICE_REVIEW_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, service_review_text)],
+            States.SERVICE_LIKES: [CallbackQueryHandler(service_likes_handler, pattern="^likes_")],
+            States.SERVICE_RATING: [CallbackQueryHandler(service_rating_handler, pattern="^rate_")],
+            States.SERVICE_REVIEW_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, service_review_text)],
             # Delivery states (new flow)
-            DELIVERY_LIKES: [CallbackQueryHandler(delivery_likes_handler, pattern="^likes_")],
-            DELIVERY_RATING: [CallbackQueryHandler(delivery_rating_handler, pattern="^rate_")],
-            DELIVERY_REVIEW_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, delivery_review_text)],
+            States.DELIVERY_LIKES: [CallbackQueryHandler(delivery_likes_handler, pattern="^likes_")],
+            States.DELIVERY_RATING: [CallbackQueryHandler(delivery_rating_handler, pattern="^rate_")],
+            States.DELIVERY_REVIEW_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, delivery_review_text)],
+            # Common preview and edit states
+            States.PREVIEW: [CallbackQueryHandler(preview_handler, pattern="^(confirm|edit)$")],
+            States.EDIT_MENU: [CallbackQueryHandler(edit_menu_handler, pattern="^edit_")],
+            States.EDIT_RATING: [CallbackQueryHandler(edit_rating_handler, pattern="^rate_")],
+            States.EDIT_LIKES: [CallbackQueryHandler(edit_likes_handler, pattern="^likes_")],
+            States.EDIT_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_product_handler)],
+            States.EDIT_REVIEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_review_handler)],
             # Common more reviews
-            PREVIEW: [CallbackQueryHandler(preview_handler, pattern="^(confirm|edit)$")],
-            EDIT_MENU: [CallbackQueryHandler(edit_menu_handler, pattern="^edit_")],
-            EDIT_RATING: [CallbackQueryHandler(edit_rating_handler, pattern="^rate_")],
-            EDIT_LIKES: [CallbackQueryHandler(edit_likes_handler, pattern="^likes_")],  # Reuse likes handlers
-            EDIT_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_product_handler)],
-            EDIT_REVIEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_review_handler)],
-            # Add EDIT_LIKES, EDIT_PRODUCT, EDIT_REVIEW if needed, but reuse existing likes/product/review states for simplicity
-            MORE_REVIEWS: [CallbackQueryHandler(more_reviews, pattern="^more_")],        },
+            States.MORE_REVIEWS: [CallbackQueryHandler(more_reviews, pattern="^more_")],
+        },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_message=False,
     )

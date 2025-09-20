@@ -82,7 +82,6 @@ async def service_likes_handler(update: Update, context: ContextTypes.DEFAULT_TY
             return 13  # PREVIEW
         # Proceed to rating
         else: 
-            await query.edit_message_text("Отлично! Оцените наш сервис по шкале", reply_markup=None)
 
             # Show rating buttons
             keyboard = [
