@@ -120,7 +120,7 @@ async def service_likes_handler(update: Update, context: ContextTypes.DEFAULT_TY
         if "Message is not modified" in str(e):
             pass
         else:
-            logging.getLogger(__name__).error(f"Error editing likes message: {e}")
+            logger.error(f"Error editing likes message: {e}")
 
     return SERVICE_LIKES
 
@@ -148,6 +148,7 @@ async def service_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE
         'rating': context.user_data['current_rating'],
         'likes': list(context.user_data.get('current_likes', [])),
         'review_text': context.user_data['current_review_text'],
+        'user_name': context.user_data.get('user_name', None)  # Added user_name
     }
 
     # Format for preview

@@ -116,14 +116,14 @@ async def tea_likes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
             await query.edit_message_text(f"Вот ваш комментарий, проверьте перед отправкой, в дальнейшем его нельзя будет изменить:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML") 
             context.user_data.pop('editing', None)  
-            return 13  # PREVIEW
+            return PREVIEW
         else:
             await query.edit_message_text("Отлично! А теперь напишите пару строк в произвольной форме", reply_markup=None)
-            return 6  # TEA_REVIEW_TEXT
+            return TEA_REVIEW_TEXT
 
     # Update buttons by editing the message
     all_selected = len(selected) == len(options)
-    keyboard_options = {'taste': 'ВКУС', 'aroma': 'АРОМАТ', 'feeling': 'ОЩУЩЕНИЕ О ЧАЯ'}
+    keyboard_options = {'taste': 'ВКУС', 'aroma': 'АРОМАТ', 'feeling': 'ОЩУЩЕНИЕ ОТ ЧАЯ'}
     keyboard = [
         [
             InlineKeyboardButton(f"{'✅ ' if 'taste' in selected else ''}{keyboard_options['taste']}", callback_data="likes_taste"),
@@ -131,7 +131,7 @@ async def tea_likes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ],
         [
             InlineKeyboardButton(f"{'✅ ' if 'feeling' in selected else ''}{keyboard_options['feeling']}", callback_data="likes_feeling"),
-            InlineKeyboardButton(f"{'✅ ' if all_selected else ''}Все", callback_data="likes_all"),
+            InlineKeyboardButton(f"{'✅ ' if all_selected else ''}ВСЁ", callback_data="likes_all"),
         ],
         [InlineKeyboardButton("Готово", callback_data="likes_done")],
     ]
@@ -143,7 +143,7 @@ async def tea_likes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if "Message is not modified" in str(e):
             pass  # Ignore if no change
         else:
-            logging.getLogger(__name__).error(f"Error editing likes message: {e}")
+            logger.error(f"Error editing likes message: {e}")
 
     return TEA_LIKES
 
@@ -159,6 +159,7 @@ async def tea_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         'rating': context.user_data['current_rating'],
         'likes': list(context.user_data.get('current_likes', set())),
         'review_text': context.user_data['current_review_text'],
+        'user_name': context.user_data.get('user_name', None)  # Added user_name
     }
 
     # Format for preview
@@ -187,4 +188,4 @@ async def tea_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data.pop('current_likes', None)
     context.user_data.pop('current_review_text', None)
 
-    return 13  # PREVIEW
+    return PREVIEW
