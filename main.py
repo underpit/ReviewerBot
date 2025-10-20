@@ -1,6 +1,7 @@
 import logging
 import json
 import sqlite3
+from datetime import datetime
 from enum import IntEnum
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -14,7 +15,6 @@ from telegram.ext import (
 )
 import telegram.error
 import traceback
-from datetime import datetime
 
 from tea import (
     tea_product, tea_photo, tea_photo_reprompt, tea_rating, tea_likes, tea_review_text
@@ -35,6 +35,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Initialize SQLite database
+def init_db():
+    conn = sqlite3.connect('reviews.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            product TEXT,
+            photo_id TEXT,
+            rating INTEGER NOT NULL,
+            likes TEXT NOT NULL,
+            review_text TEXT NOT NULL,
+            is_anonymous BOOLEAN NOT NULL,
+            timestamp TEXT NOT NULL,
+            is_deleted BOOLEAN NOT NULL DEFAULT 0
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()  # Create DB on startup
+
 # Cached bot_config (load once)
 try:
     with open("bot_config.json", "r", encoding="utf-8") as f:
@@ -44,32 +68,6 @@ except (FileNotFoundError, json.JSONDecodeError) as e:
     bot_config = {"telegram_bot_token": "fallback_token", "channel_id": "@fallback_channel"}
 BOT_TOKEN = bot_config["telegram_bot_token"]
 CHANNEL_ID = bot_config["channel_id"]
-
-# Initialize SQLite database
-def init_db():
-    try:
-        with sqlite3.connect("reviews.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS reviews (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    category TEXT NOT NULL,
-                    product TEXT,
-                    photo_id TEXT,
-                    rating INTEGER NOT NULL,
-                    likes TEXT NOT NULL,
-                    review_text TEXT NOT NULL,
-                    is_anonymous BOOLEAN NOT NULL,
-                    created_at TIMESTAMP NOT NULL
-                )
-            """)
-            conn.commit()
-    except sqlite3.Error as e:
-        logger.error(f"Database initialization error: {e}")
-
-# Call init_db on startup
-init_db()
 
 # States as IntEnum for readability and faster lookups
 class States(IntEnum):
@@ -94,6 +92,8 @@ class States(IntEnum):
     EDIT_REVIEW = 18
     FINAL_CONFIRM = 19
     NAME = 20
+    HISTORY = 21
+    DELETE_SPECIFIC = 22
 
 # Common rating keyboard (optimized, used in all rating handlers)
 def get_rating_keyboard() -> InlineKeyboardMarkup:
@@ -121,51 +121,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("Please use this bot in a private chat.")
         return
 
-    keyboard = ReplyKeyboardMarkup([["Оставить отзыв", "История"]], resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text("Приветствую! Выберите действие ниже:", reply_markup=keyboard)
-
-async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles 'История' command, shows all reviews by the user."""
-    if update.message.chat.type != "private":
-        await update.message.reply_text("Please use this bot in a private chat.")
-        return
-
-    user_id = update.effective_user.id
-    try:
-        with sqlite3.connect("reviews.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT category, product, photo_id, rating, likes, review_text, is_anonymous, created_at
-                FROM reviews WHERE user_id = ? ORDER BY created_at DESC
-            """, (user_id,))
-            reviews = cursor.fetchall()
-
-        if not reviews:
-            await update.message.reply_text("У вас пока нет сохраненных отзывов.")
-            return
-
-        for review in reviews:
-            category, product, photo_id, rating, likes, review_text, is_anonymous, created_at = review
-            likes_list = json.loads(likes)
-            review_data = {
-                'category': category,
-                'product': product or '',
-                'photo': photo_id,
-                'rating': rating,
-                'likes': likes_list,
-                'review_text': review_text,
-                'user_name': None if is_anonymous else context.user_data.get('user_name', 'Неизвестный пользователь')
-            }
-            format_func = CATEGORY_ROUTING.get(category, {}).get('format', format_tea_review)
-            formatted = format_func(review_data)
-            await update.message.reply_text(
-                f"Отзыв от {created_at}:\n\n{formatted}",
-                parse_mode="HTML"
-            )
-
-    except sqlite3.Error as e:
-        logger.error(f"Database error in history: {e}\n{traceback.format_exc()}")
-        await update.message.reply_text("Ошибка при получении истории. Попробуйте позже.")
+    keyboard = ReplyKeyboardMarkup([["История", "Оставить отзыв"]], resize_keyboard=True, one_time_keyboard=False)
+    await update.message.reply_text("Приветствую! Выберите действие:", reply_markup=keyboard)
 
 async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the review process by asking for name."""
@@ -186,6 +143,54 @@ async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     await update.message.reply_text("Как к вам обращаться, можете использовать кнопки или написать свое имя", reply_markup=reply_markup)
     return States.NAME
+
+async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles 'История' button, shows user's past reviews from DB in oldest-to-newest order."""
+    if update.message.chat.type != "private":
+        await update.message.reply_text("Please use this bot in a private chat.")
+        return ConversationHandler.END
+
+    user_id = update.effective_user.id
+    conn = sqlite3.connect('reviews.db')
+    c = conn.cursor()
+    c.execute('SELECT * FROM reviews WHERE user_id = ? AND is_deleted = 0 ORDER BY timestamp ASC', (user_id,))
+    reviews = c.fetchall()
+    conn.close()
+
+    if not reviews:
+        await update.message.reply_text("У вас пока нет отзывов.")
+        return ConversationHandler.END
+
+    await update.message.reply_text("Ваши прошлые отзывы (от старых к новым):")
+    for i, review in enumerate(reviews, 1):
+        review_data = {
+            'category': review[2],
+            'product': review[3] or '',
+            'photo': review[4],
+            'rating': review[5],
+            'likes': json.loads(review[6]),
+            'review_text': review[7],
+            'user_name': None if review[8] else context.user_data.get('user_name', None)
+        }
+        format_func = CATEGORY_ROUTING[review_data['category']]['format']
+        formatted = format_func(review_data)
+        preview = f"{review_data['category'].capitalize()}: {review_data.get('product', '') or review_data['review_text'][:20]}..."
+        if review_data['photo']:
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=review_data['photo'],
+                caption=f"Отзыв {i} ({review[9]}): {preview}\n\n{formatted}",
+                parse_mode="HTML"
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"Отзыв {i} ({review[9]}): {preview}\n\n{formatted}",
+                parse_mode="HTML"
+            )
+
+    await update.message.reply_text("Это ваши прошлые отзывы. Хотите оставить новый?", reply_markup=ReplyKeyboardMarkup([["История", "Оставить отзыв"]], resize_keyboard=True))
+    return ConversationHandler.END
 
 async def name_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles name selection or input."""
@@ -302,46 +307,88 @@ async def final_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data.clear()
         return ConversationHandler.END
     elif data == 'delete_specific':
-        await query.edit_message_text("Функциональность удаления конкретного отзыва будет добавлена позже.")
-        return States.FINAL_CONFIRM
+        reviews = context.user_data.get('reviews', [])
+        if not reviews:
+            await query.edit_message_text("Нет отзывов для удаления в текущей сессии.")
+            return States.FINAL_CONFIRM
+
+        await query.message.reply_text("Ваши отзывы в текущей сессии:")
+        for i, review in enumerate(reviews, 1):
+            format_func = CATEGORY_ROUTING[review['category']]['format']
+            formatted = format_func(review)
+            if review.get('photo'):
+                await context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
+                    photo=review['photo'],
+                    caption=f"Отзыв №{i}:\n\n{formatted}",
+                    parse_mode="HTML"
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"Отзыв №{i}:\n\n{formatted}",
+                    parse_mode="HTML"
+                )
+
+        keyboard = []
+        for i in range(len(reviews)):
+            keyboard.append([InlineKeyboardButton(f"Отзыв №{i+1}", callback_data=f"delete_review_{i}")])
+        keyboard.append([InlineKeyboardButton("Назад", callback_data="back_to_confirm")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("Выберите отзыв для удаления:", reply_markup=reply_markup)
+        return States.DELETE_SPECIFIC
     elif data == 'delete_all':
         context.user_data['reviews'] = []
         await query.edit_message_text("Все отзывы удалены.")
-        keyboard = ReplyKeyboardMarkup([["Оставить отзыв", "История"]], resize_keyboard=True, one_time_keyboard=False)
-        await query.message.reply_text("Приветствую! Выберите действие ниже:", reply_markup=keyboard)
+        keyboard = ReplyKeyboardMarkup([["История", "Оставить отзыв"]], resize_keyboard=True, one_time_keyboard=False)
+        await query.message.reply_text("Приветствую! Выберите действие:", reply_markup=keyboard)
         return ConversationHandler.END
+
+async def delete_specific_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles selection of a specific review to delete."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "back_to_confirm":
+        keyboard = [
+            [InlineKeyboardButton("Опубликовать", callback_data="publish")],
+            [
+                InlineKeyboardButton("Удалить конкретный пост!", callback_data="delete_specific"),
+                InlineKeyboardButton("Удалить всё!", callback_data="delete_all")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("Подтвердите публикацию ваших отзывов:", reply_markup=reply_markup)
+        return States.FINAL_CONFIRM
+
+    if data.startswith("delete_review_"):
+        index = int(data.split("_")[-1])
+        reviews = context.user_data.get('reviews', [])
+        if 0 <= index < len(reviews):
+            deleted_review = reviews.pop(index)
+            await query.edit_message_text(f"Отзыв №{index + 1} удален.")
+        else:
+            await query.edit_message_text("Ошибка: Отзыв не найден.")
+
+        keyboard = [
+            [InlineKeyboardButton("Опубликовать", callback_data="publish")],
+            [
+                InlineKeyboardButton("Удалить конкретный пост!", callback_data="delete_specific"),
+                InlineKeyboardButton("Удалить всё!", callback_data="delete_all")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("Подтвердите публикацию ваших отзывов:", reply_markup=reply_markup)
+        return States.FINAL_CONFIRM
 
 async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles preview confirm/edit."""
     query = update.callback_query
     await query.answer()
     if query.data == 'confirm':
-        # Append pending review to reviews list and save to DB
         pending_review = context.user_data.get('pending_review', {})
         if pending_review:
-            try:
-                with sqlite3.connect("reviews.db") as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO reviews (user_id, category, product, photo_id, rating, likes, review_text, is_anonymous, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        query.from_user.id,
-                        pending_review.get('category'),
-                        pending_review.get('product'),
-                        pending_review.get('photo'),
-                        pending_review.get('rating'),
-                        json.dumps(pending_review.get('likes', [])),
-                        pending_review.get('review_text'),
-                        pending_review.get('user_name') is None,
-                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    ))
-                    conn.commit()
-            except sqlite3.Error as e:
-                logger.error(f"Database error saving review: {e}\n{traceback.format_exc()}")
-                await query.message.reply_text("Ошибка при сохранении отзыва. Попробуйте снова.")
-                return States.PREVIEW
-
             context.user_data['reviews'].append(pending_review)
             context.user_data.pop('pending_review', None)
             context.user_data.pop('pending_data', None)
@@ -517,6 +564,8 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.callback_query.message.reply_text("Нет отзывов для публикации.")
         return
 
+    conn = sqlite3.connect('reviews.db')
+    c = conn.cursor()
     for review in reviews:
         category = review.get('category', 'unknown')
         photo = review.get('photo')
@@ -548,6 +597,21 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                         caption=message,
                         parse_mode="HTML"
                     )
+                    c.execute('''
+                        INSERT INTO reviews (user_id, category, product, photo_id, rating, likes, review_text, is_anonymous, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        update.effective_user.id,
+                        review['category'],
+                        review.get('product'),
+                        review.get('photo'),
+                        review['rating'],
+                        json.dumps(review['likes']),
+                        review['review_text'],
+                        1 if review.get('user_name') is None else 0,
+                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    ))
+                    conn.commit()
                 except telegram.error.BadRequest as e:
                     logger.error(f"BadRequest in send_photo for {category}: {e}, photo: {photo}")
                     if hasattr(update, 'callback_query'):
@@ -565,6 +629,21 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                         text=message,
                         parse_mode="HTML"
                     )
+                    c.execute('''
+                        INSERT INTO reviews (user_id, category, product, photo_id, rating, likes, review_text, is_anonymous, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        update.effective_user.id,
+                        review['category'],
+                        review.get('product'),
+                        review.get('photo'),
+                        review['rating'],
+                        json.dumps(review['likes']),
+                        review['review_text'],
+                        1 if review.get('user_name') is None else 0,
+                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    ))
+                    conn.commit()
                 except telegram.error.BadRequest as e:
                     logger.error(f"BadRequest in send_message for {category}: {e}")
                     if hasattr(update, 'callback_query'):
@@ -580,6 +659,7 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             logger.error(f"Error posting review for {category}: {e}\n{traceback.format_exc()}")
             if hasattr(update, 'callback_query'):
                 await update.callback_query.message.reply_text("Извините, произошла ошибка при публикации одного из отзывов.")
+    conn.close()
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels the review process."""
@@ -595,11 +675,9 @@ def main() -> None:
     """Run the bot."""
     application = Application.builder().token(BOT_TOKEN).read_timeout(30).write_timeout(30).connect_timeout(30).pool_timeout(30).build()
 
-    # Handlers
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.Regex("История"), history_command))
+    application.add_handler(MessageHandler(filters.Regex("История"), history_handler))
 
-    # Conversation handler for review collection
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("Оставить отзыв"), start_review)],
         states={
@@ -630,6 +708,7 @@ def main() -> None:
             States.EDIT_REVIEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_review_handler)],
             States.MORE_REVIEWS: [CallbackQueryHandler(more_reviews, pattern="^more_")],
             States.FINAL_CONFIRM: [CallbackQueryHandler(final_confirm_handler, pattern="^(publish|delete_specific|delete_all)$")],
+            States.DELETE_SPECIFIC: [CallbackQueryHandler(delete_specific_handler, pattern="^(delete_review_|back_to_confirm)")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_message=False,
