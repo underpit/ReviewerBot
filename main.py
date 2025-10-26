@@ -15,7 +15,6 @@ from telegram.ext import (
 )
 import telegram.error
 import traceback
-
 from tea import (
     tea_product, tea_photo, tea_photo_reprompt, tea_rating, tea_likes, tea_review_text
 )
@@ -28,13 +27,11 @@ from delivery import (
 from form import (
     format_tea_review, format_service_review, format_delivery_review
 )
-
 # Set up logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
 # Initialize SQLite database
 def init_db():
     conn = sqlite3.connect('reviews.db')
@@ -56,9 +53,7 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
-
 init_db()  # Create DB on startup
-
 # Cached bot_config (load once)
 try:
     with open("bot_config.json", "r", encoding="utf-8") as f:
@@ -68,7 +63,6 @@ except (FileNotFoundError, json.JSONDecodeError) as e:
     bot_config = {"telegram_bot_token": "fallback_token", "channel_id": "@fallback_channel"}
 BOT_TOKEN = bot_config["telegram_bot_token"]
 CHANNEL_ID = bot_config["channel_id"]
-
 # States as IntEnum for readability and faster lookups
 class States(IntEnum):
     CATEGORY = 0
@@ -94,7 +88,7 @@ class States(IntEnum):
     NAME = 20
     HISTORY = 21
     DELETE_SPECIFIC = 22
-
+    EDIT_PERSON = 23  # New state for editing person/name
 # Common rating keyboard (optimized, used in all rating handlers)
 def get_rating_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
@@ -107,60 +101,51 @@ def get_rating_keyboard() -> InlineKeyboardMarkup:
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
-
 # Category routing dict (unchanged)
 CATEGORY_ROUTING = {
     'чай': {'product': tea_product, 'likes_state': States.TEA_LIKES, 'rating_state': States.TEA_RATING, 'review_state': States.TEA_REVIEW_TEXT, 'format': format_tea_review, 'has_product': True},
     'сервис': {'product': None, 'likes_state': States.SERVICE_LIKES, 'rating_state': States.SERVICE_RATING, 'review_state': States.SERVICE_REVIEW_TEXT, 'format': format_service_review, 'has_product': False},
     'доставка': {'product': None, 'likes_state': States.DELIVERY_LIKES, 'rating_state': States.DELIVERY_RATING, 'review_state': States.DELIVERY_REVIEW_TEXT, 'format': format_delivery_review, 'has_product': False},
 }
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles /start command, shows buttons to start review or view history."""
     if update.message.chat.type != "private":
         await update.message.reply_text("Please use this bot in a private chat.")
         return
-
     keyboard = ReplyKeyboardMarkup([["История", "Оставить отзыв"]], resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text("Приветствую! Выберите действие:", reply_markup=keyboard)
-
 async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the review process by asking for name."""
     if update.message.chat.type != "private":
         await update.message.reply_text("Please use this bot in a private chat.")
         return ConversationHandler.END
-
     # Initialize reviews list
     context.user_data['reviews'] = []
-
+    user = update.message.from_user
+    nickname = f"@{user.username}" if user.username else user.first_name
     keyboard = [
         [
-            InlineKeyboardButton("Использовать имя пользователя", callback_data="use_username"),
+            InlineKeyboardButton(f"Использовать {nickname}", callback_data="use_username"),
             InlineKeyboardButton("Анонимно", callback_data="anonymous"),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text("Как к вам обращаться, можете использовать кнопки или написать свое имя", reply_markup=reply_markup)
+    await update.message.reply_text("Как к вам обращаться? (Можете написать свое имя)", reply_markup=reply_markup)
     return States.NAME
-
 async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles 'История' button, shows user's past reviews from DB in oldest-to-newest order."""
     if update.message.chat.type != "private":
         await update.message.reply_text("Please use this bot in a private chat.")
         return ConversationHandler.END
-
     user_id = update.effective_user.id
     conn = sqlite3.connect('reviews.db')
     c = conn.cursor()
     c.execute('SELECT * FROM reviews WHERE user_id = ? AND is_deleted = 0 ORDER BY timestamp ASC', (user_id,))
     reviews = c.fetchall()
     conn.close()
-
     if not reviews:
         await update.message.reply_text("У вас пока нет отзывов.")
         return ConversationHandler.END
-
     await update.message.reply_text("Ваши прошлые отзывы (от старых к новым):")
     for i, review in enumerate(reviews, 1):
         review_data = {
@@ -188,10 +173,8 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 text=f"Отзыв {i} ({review[9]}): {preview}\n\n{formatted}",
                 parse_mode="HTML"
             )
-
     await update.message.reply_text("Это ваши прошлые отзывы. Хотите оставить новый?", reply_markup=ReplyKeyboardMarkup([["История", "Оставить отзыв"]], resize_keyboard=True))
     return ConversationHandler.END
-
 async def name_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles name selection or input."""
     query = update.callback_query
@@ -203,7 +186,6 @@ async def name_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         context.user_data['user_name'] = user_name
     elif data == 'anonymous':
         context.user_data['user_name'] = None
-
     # Proceed to category selection
     keyboard = [
         [
@@ -213,14 +195,11 @@ async def name_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     await query.message.reply_text("На что пишем отзыв?", reply_markup=reply_markup)
     return States.CATEGORY
-
 async def name_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles custom name text input."""
     context.user_data['user_name'] = update.message.text
-
     # Proceed to category
     keyboard = [
         [
@@ -230,10 +209,67 @@ async def name_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text("На что пишем отзыв?", reply_markup=reply_markup)
     return States.CATEGORY
-
+async def edit_person_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles editing person/name, shows selection step."""
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+    nickname = f"@{user.username}" if user.username else user.first_name
+    keyboard = [
+        [
+            InlineKeyboardButton(f"Использовать {nickname}", callback_data="use_username_edit"),
+            InlineKeyboardButton("Анонимно", callback_data="anonymous_edit"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text("Измените, как к вам обращаться? (Можете написать свое имя)", reply_markup=reply_markup)
+    return States.EDIT_PERSON
+async def edit_person_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles callback for edited name."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    pending_data = context.user_data.get('pending_data', {})
+    if data == 'use_username_edit':
+        user = query.from_user
+        user_name = f"@{user.username}" if user.username else user.first_name
+        pending_data['user_name'] = user_name
+    elif data == 'anonymous_edit':
+        pending_data['user_name'] = None
+    context.user_data['pending_data'] = pending_data
+    category = pending_data['category']
+    format_func = CATEGORY_ROUTING[category]['format']
+    formatted = format_func(pending_data)
+    keyboard = [
+        [
+            InlineKeyboardButton("Подтвердить", callback_data="confirm"),
+            InlineKeyboardButton("Изменить", callback_data="edit"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(f"Вот ваш обновленный комментарий:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML")
+    context.user_data.pop('editing', None)
+    return States.PREVIEW
+async def edit_person_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles text input for edited name."""
+    pending_data = context.user_data.get('pending_data', {})
+    pending_data['user_name'] = update.message.text
+    context.user_data['pending_data'] = pending_data
+    category = pending_data['category']
+    format_func = CATEGORY_ROUTING[category]['format']
+    formatted = format_func(pending_data)
+    keyboard = [
+        [
+            InlineKeyboardButton("Подтвердить", callback_data="confirm"),
+            InlineKeyboardButton("Изменить", callback_data="edit"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(f"Вот ваш обновленный комментарий:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML")
+    context.user_data.pop('editing', None)
+    return States.PREVIEW
 async def category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles category selection and routes using dict."""
     query = update.callback_query
@@ -241,11 +277,9 @@ async def category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     selected_category = query.data
     context.user_data['current_category'] = selected_category
     routing = CATEGORY_ROUTING.get(selected_category, {})
-
     if not routing:
         await query.edit_message_text("Unknown category.")
         return ConversationHandler.END
-
     if routing['has_product']:
         await query.edit_message_text(f"Выбранная категория: {selected_category.upper()} \n\nВведите название продукта:")
         return States.TEA_PRODUCT
@@ -257,7 +291,6 @@ async def category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             elif selected_category == 'доставка':
                 await delivery_likes(query, context)
         return routing['likes_state']
-
 async def more_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles 'more reviews' selection."""
     query = update.callback_query
@@ -284,13 +317,11 @@ async def more_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("Подтвердите публикацию ваших отзывов:", reply_markup=reply_markup)
         return States.FINAL_CONFIRM
-
 async def final_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles final confirmation buttons for posting reviews."""
     query = update.callback_query
     await query.answer()
     data = query.data
-
     if data == 'publish':
         await post_reviews(update, context)
         await query.edit_message_text("Отзывы опубликованы! Спасибо!")
@@ -301,7 +332,6 @@ async def final_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 promo_text = f"{promo.get('text', '')} Промокод: {promo.get('code', '')}"
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.error(f"Promo JSON error: {e}")
-
         if promo_text:
             await query.message.reply_text(promo_text)
         context.user_data.clear()
@@ -311,7 +341,6 @@ async def final_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TY
         if not reviews:
             await query.edit_message_text("Нет отзывов для удаления в текущей сессии.")
             return States.FINAL_CONFIRM
-
         await query.message.reply_text("Ваши отзывы в текущей сессии:")
         for i, review in enumerate(reviews, 1):
             format_func = CATEGORY_ROUTING[review['category']]['format']
@@ -329,7 +358,6 @@ async def final_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TY
                     text=f"Отзыв №{i}:\n\n{formatted}",
                     parse_mode="HTML"
                 )
-
         keyboard = []
         for i in range(len(reviews)):
             keyboard.append([InlineKeyboardButton(f"Отзыв №{i+1}", callback_data=f"delete_review_{i}")])
@@ -343,13 +371,11 @@ async def final_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TY
         keyboard = ReplyKeyboardMarkup([["История", "Оставить отзыв"]], resize_keyboard=True, one_time_keyboard=False)
         await query.message.reply_text("Приветствую! Выберите действие:", reply_markup=keyboard)
         return ConversationHandler.END
-
 async def delete_specific_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles selection of a specific review to delete."""
     query = update.callback_query
     await query.answer()
     data = query.data
-
     if data == "back_to_confirm":
         keyboard = [
             [InlineKeyboardButton("Опубликовать", callback_data="publish")],
@@ -361,7 +387,6 @@ async def delete_specific_handler(update: Update, context: ContextTypes.DEFAULT_
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("Подтвердите публикацию ваших отзывов:", reply_markup=reply_markup)
         return States.FINAL_CONFIRM
-
     if data.startswith("delete_review_"):
         index = int(data.split("_")[-1])
         reviews = context.user_data.get('reviews', [])
@@ -370,7 +395,6 @@ async def delete_specific_handler(update: Update, context: ContextTypes.DEFAULT_
             await query.edit_message_text(f"Отзыв №{index + 1} удален.")
         else:
             await query.edit_message_text("Ошибка: Отзыв не найден.")
-
         keyboard = [
             [InlineKeyboardButton("Опубликовать", callback_data="publish")],
             [
@@ -381,7 +405,6 @@ async def delete_specific_handler(update: Update, context: ContextTypes.DEFAULT_
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.reply_text("Подтвердите публикацию ваших отзывов:", reply_markup=reply_markup)
         return States.FINAL_CONFIRM
-
 async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles preview confirm/edit."""
     query = update.callback_query
@@ -392,7 +415,6 @@ async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data['reviews'].append(pending_review)
             context.user_data.pop('pending_review', None)
             context.user_data.pop('pending_data', None)
-
         keyboard = [
             [InlineKeyboardButton("Да", callback_data="more_yes")],
             [InlineKeyboardButton("Нет", callback_data="more_no")],
@@ -403,7 +425,7 @@ async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif query.data == 'edit':
         category = context.user_data.get('pending_data', {}).get('category', '')
         has_product = CATEGORY_ROUTING.get(category, {}).get('has_product', False)
-        keyboard = []
+        keyboard = [[InlineKeyboardButton("Лицо", callback_data="edit_person")]]
         if has_product:
             keyboard.append([InlineKeyboardButton("Продукт", callback_data="edit_product")])
         keyboard += [
@@ -414,15 +436,15 @@ async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("Что хотите изменить?", reply_markup=reply_markup)
         return States.EDIT_MENU
-
 async def edit_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles edit menu selection."""
     query = update.callback_query
     await query.answer()
     data = query.data
     context.user_data['editing'] = True
-
-    if data == 'edit_rating':
+    if data == 'edit_person':
+        return await edit_person_handler(update, context)
+    elif data == 'edit_rating':
         reply_markup = get_rating_keyboard()
         await query.edit_message_text("Измените рейтинг:", reply_markup=reply_markup)
         return States.EDIT_RATING
@@ -481,7 +503,6 @@ async def edit_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     elif data == 'edit_review':
         await query.edit_message_text("Измените текст отзыва:")
         return States.EDIT_REVIEW
-
 async def edit_rating_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles edit rating."""
     query = update.callback_query
@@ -490,7 +511,6 @@ async def edit_rating_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     pending_data = context.user_data.get('pending_data', {})
     pending_data['rating'] = rating
     context.user_data['pending_data'] = pending_data
-
     category = pending_data['category']
     format_func = CATEGORY_ROUTING[category]['format']
     formatted = format_func(pending_data)
@@ -504,7 +524,6 @@ async def edit_rating_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_text(f"Вот ваш обновленный комментарий:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML")
     context.user_data.pop('editing', None)
     return States.PREVIEW
-
 async def edit_likes_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles edit likes (route to category-specific handler)."""
     category = context.user_data.get('pending_data', {}).get('category', '')
@@ -514,13 +533,11 @@ async def edit_likes_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return await service_likes_handler(update, context)
     elif category == 'доставка':
         return await delivery_likes_handler(update, context)
-
 async def edit_product_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles edit product."""
     pending_data = context.user_data.get('pending_data', {})
     pending_data['product'] = update.message.text
     context.user_data['pending_data'] = pending_data
-
     category = pending_data['category']
     format_func = CATEGORY_ROUTING[category]['format']
     formatted = format_func(pending_data)
@@ -534,13 +551,11 @@ async def edit_product_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(f"Вот ваш обновленный комментарий:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML")
     context.user_data.pop('editing', None)
     return States.PREVIEW
-
 async def edit_review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles edit review text."""
     pending_data = context.user_data.get('pending_data', {})
     pending_data['review_text'] = update.message.text
     context.user_data['pending_data'] = pending_data
-
     category = pending_data['category']
     format_func = CATEGORY_ROUTING[category]['format']
     formatted = format_func(pending_data)
@@ -554,7 +569,6 @@ async def edit_review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(f"Вот ваш обновленный комментарий:\n\n{formatted}", reply_markup=reply_markup, parse_mode="HTML")
     context.user_data.pop('editing', None)
     return States.PREVIEW
-
 async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Posts all collected reviews to the channel using category-specific formatting."""
     reviews = context.user_data.get('reviews', [])
@@ -563,7 +577,6 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if hasattr(update, 'callback_query'):
             await update.callback_query.message.reply_text("Нет отзывов для публикации.")
         return
-
     conn = sqlite3.connect('reviews.db')
     c = conn.cursor()
     for review in reviews:
@@ -580,15 +593,12 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             else:
                 logger.error(f"Invalid category: {category}")
                 message = "Неизвестная отзыва."
-
             if len(message) > (4096 if photo else 16384):
                 logger.error(f"Message too long for category {category}: {len(message)} characters")
                 if hasattr(update, 'callback_query'):
                     await update.callback_query.message.reply_text(f"Ошибка: Отзыв для {category} слишком длинный.")
                 continue
-
             logger.info(f"Posting review for category: {category}, user: {user_name}, has_photo: {bool(photo)}")
-
             if photo:
                 try:
                     await context.bot.send_photo(
@@ -654,30 +664,24 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     if hasattr(update, 'callback_query'):
                         await update.callback_query.message.reply_text("Ошибка: Бот не имеет прав для публикации в канал.")
                     return
-
         except Exception as e:
             logger.error(f"Error posting review for {category}: {e}\n{traceback.format_exc()}")
             if hasattr(update, 'callback_query'):
                 await update.callback_query.message.reply_text("Извините, произошла ошибка при публикации одного из отзывов.")
     conn.close()
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels the review process."""
     await update.message.reply_text("Отзыв отменен.")
     context.user_data.clear()
     return ConversationHandler.END
-
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log errors."""
     logger.error(f"Update {update} caused error {context.error}")
-
 def main() -> None:
     """Run the bot."""
     application = Application.builder().token(BOT_TOKEN).read_timeout(30).write_timeout(30).connect_timeout(30).pool_timeout(30).build()
-
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.Regex("История"), history_handler))
-
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("Оставить отзыв"), start_review)],
         states={
@@ -701,11 +705,15 @@ def main() -> None:
             States.DELIVERY_RATING: [CallbackQueryHandler(delivery_rating_handler, pattern="^rate_")],
             States.DELIVERY_REVIEW_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, delivery_review_text)],
             States.PREVIEW: [CallbackQueryHandler(preview_handler, pattern="^(confirm|edit)$")],
-            States.EDIT_MENU: [CallbackQueryHandler(edit_menu_handler, pattern="^edit_")],
+            States.EDIT_MENU: [CallbackQueryHandler(edit_menu_handler, pattern="^(edit_)")],
             States.EDIT_RATING: [CallbackQueryHandler(edit_rating_handler, pattern="^rate_")],
             States.EDIT_LIKES: [CallbackQueryHandler(edit_likes_handler, pattern="^likes_")],
             States.EDIT_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_product_handler)],
             States.EDIT_REVIEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_review_handler)],
+            States.EDIT_PERSON: [
+                CallbackQueryHandler(edit_person_callback, pattern="^(use_username_edit|anonymous_edit)$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_person_text),
+            ],
             States.MORE_REVIEWS: [CallbackQueryHandler(more_reviews, pattern="^more_")],
             States.FINAL_CONFIRM: [CallbackQueryHandler(final_confirm_handler, pattern="^(publish|delete_specific|delete_all)$")],
             States.DELETE_SPECIFIC: [CallbackQueryHandler(delete_specific_handler, pattern="^(delete_review_|back_to_confirm)")],
@@ -713,11 +721,8 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", cancel)],
         per_message=False,
     )
-
     application.add_handler(conv_handler)
     application.add_error_handler(error_handler)
-
     application.run_polling(drop_pending_updates=True)
-
 if __name__ == "__main__":
     main()
