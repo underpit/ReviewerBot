@@ -107,6 +107,10 @@ CATEGORY_ROUTING = {
     'сервис': {'product': None, 'likes_state': States.SERVICE_LIKES, 'rating_state': States.SERVICE_RATING, 'review_state': States.SERVICE_REVIEW_TEXT, 'format': format_service_review, 'has_product': False},
     'доставка': {'product': None, 'likes_state': States.DELIVERY_LIKES, 'rating_state': States.DELIVERY_RATING, 'review_state': States.DELIVERY_REVIEW_TEXT, 'format': format_delivery_review, 'has_product': False},
 }
+def _sync_pending(context: ContextTypes.DEFAULT_TYPE):
+    """Копирует pending_data → pending_review, чтобы превью всегда был свежим."""
+    pd = context.user_data.get('pending_data', {})
+    context.user_data['pending_review'] = pd.copy()
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles /start command, shows buttons to start review or view history."""
     if update.message.chat.type != "private":
@@ -239,6 +243,7 @@ async def edit_person_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     elif data == 'anonymous_edit':
         pending_data['user_name'] = None
     context.user_data['pending_data'] = pending_data
+    _sync_pending(context)
     category = pending_data['category']
     format_func = CATEGORY_ROUTING[category]['format']
     formatted = format_func(pending_data)
@@ -257,6 +262,7 @@ async def edit_person_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     pending_data = context.user_data.get('pending_data', {})
     pending_data['user_name'] = update.message.text
     context.user_data['pending_data'] = pending_data
+    _sync_pending(context)
     category = pending_data['category']
     format_func = CATEGORY_ROUTING[category]['format']
     formatted = format_func(pending_data)
@@ -410,7 +416,7 @@ async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
     if query.data == 'confirm':
-        pending_review = context.user_data.get('pending_review', {})
+        pending_review = context.user_data.get('pending_data', {}).copy()
         if pending_review:
             context.user_data['reviews'].append(pending_review)
             context.user_data.pop('pending_review', None)
@@ -511,6 +517,7 @@ async def edit_rating_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     pending_data = context.user_data.get('pending_data', {})
     pending_data['rating'] = rating
     context.user_data['pending_data'] = pending_data
+    _sync_pending(context)
     category = pending_data['category']
     format_func = CATEGORY_ROUTING[category]['format']
     formatted = format_func(pending_data)
@@ -538,6 +545,7 @@ async def edit_product_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     pending_data = context.user_data.get('pending_data', {})
     pending_data['product'] = update.message.text
     context.user_data['pending_data'] = pending_data
+    _sync_pending(context)
     category = pending_data['category']
     format_func = CATEGORY_ROUTING[category]['format']
     formatted = format_func(pending_data)
@@ -556,6 +564,7 @@ async def edit_review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     pending_data = context.user_data.get('pending_data', {})
     pending_data['review_text'] = update.message.text
     context.user_data['pending_data'] = pending_data
+    _sync_pending(context)
     category = pending_data['category']
     format_func = CATEGORY_ROUTING[category]['format']
     formatted = format_func(pending_data)
