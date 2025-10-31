@@ -1,3 +1,10 @@
+#work conf
+#{
+#    "telegram_bot_token": "8418656415:AAG1mFTZTHObXIAlzX_ygOVnGRau1BSmbFU",
+#    "channel_id": "-1002756872692"
+#}
+
+
 import logging
 import json
 import sqlite3
