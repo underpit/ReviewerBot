@@ -48,6 +48,18 @@ logger = logging.getLogger(__name__)
 # Инициализация БД
 # ========================================
 def init_db():
+    # Automate setup: Create dir, file, permissions, ownership
+    if not os.path.exists(DB_DIR):
+        os.makedirs(DB_DIR, exist_ok=True)
+        logger.info(f"Created directory: {DB_DIR}")
+    if not os.path.exists(DB_PATH):
+        open(DB_PATH, 'w').close()  # Touch the file
+        logger.info(f"Created DB file: {DB_PATH}")
+    os.chmod(DB_PATH, 0o666)  # Set 666 permissions
+    os.chown(DB_PATH, 0, 0)   # Set owner to root:root (uid=0, gid=0)
+    logger.info(f"Set permissions 666 and owner root:root for {DB_PATH}")
+
+    # Now create/update table
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''
@@ -61,11 +73,16 @@ def init_db():
             likes TEXT NOT NULL,
             review_text TEXT NOT NULL,
             is_anonymous BOOLEAN NOT NULL,
-            user_name TEXT,
             timestamp TEXT NOT NULL,
             is_deleted BOOLEAN NOT NULL DEFAULT 0
         )
     ''')
+    # Add user_name if missing
+    try:
+        c.execute("ALTER TABLE reviews ADD COLUMN user_name TEXT;")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e):
+            logger.error(f"Error adding user_name column: {e}")
     conn.commit()
     conn.close()
 
@@ -171,7 +188,7 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     c.execute('SELECT * FROM reviews WHERE user_id = ? AND is_deleted = 0 ORDER BY timestamp ASC', (user_id,))
     reviews = c.fetchall()
     conn.close()
-    logger.info(f"Found {len(reviews)} reviews for user {user_id}")  # <<< DEBUG LOG
+    logger.info(f"Found {len(reviews)} reviews for user {user_id}")  # <<< <<< DEBUG LOG
     if not reviews:
         await update.message.reply_text("У вас пока нет отзывов.")
         return ConversationHandler.END
@@ -624,20 +641,28 @@ async def edit_review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.pop('editing', None)
     return States.PREVIEW
 async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Posts all collected reviews to the channel using category-specific formatting."""
     reviews = context.user_data.get('reviews', [])
     if not reviews:
         logger.warning("No reviews to post.")
         if hasattr(update, 'callback_query'):
             await update.callback_query.message.reply_text("Нет отзывов для публикации.")
         return
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
+
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+    except Exception as e:
+        logger.error(f"DB connection failed: {str(e)}")
+        if hasattr(update, 'callback_query'):
+            await update.callback_query.message.reply_text("Ошибка: Не удалось подключиться к базе данных.")
+        return
+
+    post_success = True
     for review in reviews:
         category = review.get('category', 'unknown')
         photo = review.get('photo')
-        user_name = review.get('user_name')  # <<< FIXED: From review dict
-        is_anon = 1 if user_name is None else 0
+        user_name = review.get('user_name', 'None')
         try:
             if category == 'чай':
                 message = format_tea_review(review)
@@ -648,84 +673,55 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             else:
                 logger.error(f"Invalid category: {category}")
                 message = "Неизвестная отзыва."
-            if len(message) > (4096 if photo else 16384):
-                logger.error(f"Message too long for category {category}: {len(message)} characters")
-                if hasattr(update, 'callback_query'):
-                    await update.callback_query.message.reply_text(f"Ошибка: Отзыв для {category} слишком длинный.")
-                continue
-            logger.info(f"Posting review for category: {category}, user: {user_name}, has_photo: {bool(photo)}")
+            max_len = 1024 if photo else 4096
+            if len(message) > max_len:
+                logger.error(f"Message too long for {category}: {len(message)} > {max_len} chars. Truncating...")
+                message = message[:max_len - 3] + "..."
+
+            logger.info(f"Posting review for {category}, user: {user_name}, has_photo: {bool(photo)}, len: {len(message)}")
+
+            # Send to channel
             if photo:
-                try:
-                    await context.bot.send_photo(
-                        chat_id=CHANNEL_ID,
-                        photo=photo,
-                        caption=message,
-                        parse_mode="HTML"
-                    )
-                    c.execute('''
-                        INSERT INTO reviews (user_id, category, product, photo_id, rating, likes, review_text, is_anonymous, user_name, timestamp)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        update.effective_user.id,
-                        review['category'],
-                        review.get('product'),
-                        review.get('photo'),
-                        review['rating'],
-                        json.dumps(review['likes']),
-                        review['review_text'],
-                        is_anon,
-                        user_name,  # <<< NEW: Save actual name
-                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    ))
-                    conn.commit()
-                except telegram.error.BadRequest as e:
-                    logger.error(f"BadRequest in send_photo for {category}: {e}, photo: {photo}")
-                    if hasattr(update, 'callback_query'):
-                        await update.callback_query.message.reply_text(f"Ошибка: Неверный формат фото для отзыва {category}.")
-                    continue
-                except telegram.error.Unauthorized as e:
-                    logger.error(f"Unauthorized in send_photo: {e}")
-                    if hasattr(update, 'callback_query'):
-                        await update.callback_query.message.reply_text("Ошибка: Бот не имеет прав для публикации в канал.")
-                    return
+                await context.bot.send_photo(chat_id=CHANNEL_ID, photo=photo, caption=message, parse_mode="HTML")
             else:
-                try:
-                    await context.bot.send_message(
-                        chat_id=CHANNEL_ID,
-                        text=message,
-                        parse_mode="HTML"
-                    )
-                    c.execute('''
-                        INSERT INTO reviews (user_id, category, product, photo_id, rating, likes, review_text, is_anonymous, user_name, timestamp)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        update.effective_user.id,
-                        review['category'],
-                        review.get('product'),
-                        review.get('photo'),
-                        review['rating'],
-                        json.dumps(review['likes']),
-                        review['review_text'],
-                        is_anon,
-                        user_name,  # <<< NEW
-                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    ))
-                    conn.commit()
-                except telegram.error.BadRequest as e:
-                    logger.error(f"BadRequest in send_message for {category}: {e}")
-                    if hasattr(update, 'callback_query'):
-                        await update.callback_query.message.reply_text(f"Ошибка: Неверный формат сообщения для отзыва {category}.")
-                    continue
-                except telegram.error.Unauthorized as e:
-                    logger.error(f"Unauthorized in send_message: {e}")
-                    if hasattr(update, 'callback_query'):
-                        await update.callback_query.message.reply_text("Ошибка: Бот не имеет прав для публикации в канал.")
-                    return
+                await context.bot.send_message(chat_id=CHANNEL_ID, text=message, parse_mode="HTML")
+
+            # DB insert (separate try to not affect send success)
+            try:
+                c.execute('''
+                    INSERT INTO reviews (user_id, category, product, photo_id, rating, likes, review_text, is_anonymous, user_name, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    update.effective_user.id,
+                    review['category'],
+                    review.get('product'),
+                    review.get('photo'),
+                    review['rating'],
+                    json.dumps(review['likes']),
+                    review['review_text'],
+                    1 if review.get('user_name') is None else 0,
+                    review.get('user_name'),
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                ))
+                conn.commit()
+            except Exception as db_e:
+                logger.error(f"DB insert failed for {category}: {str(db_e)}\n{traceback.format_exc()}")
+                post_success = False  # Flag for user message
+
+        except telegram.error.BadRequest as e:
+            logger.error(f"BadRequest posting {category}: {str(e)} - Message: {message[:100]}...")
+            post_success = False
+        except telegram.error.Unauthorized as e:
+            logger.error(f"Unauthorized posting {category}: {str(e)} - Check bot is channel admin!")
+            post_success = False
         except Exception as e:
-            logger.error(f"Error posting review for {category}: {e}\n{traceback.format_exc()}")
-            if hasattr(update, 'callback_query'):
-                await update.callback_query.message.reply_text("Извините, произошла ошибка при публикации одного из отзывов.")
+            logger.error(f"Unexpected error posting {category}: {str(e)}\n{traceback.format_exc()}")
+            post_success = False
+
     conn.close()
+
+    if not post_success and hasattr(update, 'callback_query'):
+        await update.callback_query.message.reply_text("Извините, произошла ошибка при публикации одного из отзывов (проверьте логи).")
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels the review process."""
     await update.message.reply_text("Отзыв отменен.")
@@ -775,16 +771,15 @@ def main() -> None:
             States.MORE_REVIEWS: [CallbackQueryHandler(more_reviews, pattern="^more_")],
             States.FINAL_CONFIRM: [CallbackQueryHandler(final_confirm_handler, pattern="^(publish|delete_specific|delete_all)$")],
             States.DELETE_SPECIFIC: [CallbackQueryHandler(delete_specific_handler, pattern="^(delete_review_|back_to_confirm)")],
-            # <<< NEW: Catch "История" in ANY state
-            States.HISTORY: [MessageHandler(filters.Regex("История"), history_handler)],  # But better as fallback
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
-            MessageHandler(filters.Regex("История"), history_handler)  # <<< FIXED: As fallback, works everywhere
         ],
         per_message=False,
     )
     application.add_handler(conv_handler)
+    # Global handler for "История" to make it work always
+    application.add_handler(MessageHandler(filters.Regex("История"), history_handler))
     application.add_error_handler(error_handler)
     application.run_polling(drop_pending_updates=True)
 if __name__ == "__main__":
