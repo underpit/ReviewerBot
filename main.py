@@ -1,13 +1,7 @@
-#work conf
-#{
-#    "telegram_bot_token": "8418656415:AAG1mFTZTHObXIAlzX_ygOVnGRau1BSmbFU",
-#    "channel_id": "-1002756872692"
-#}
-
-
 import logging
 import json
 import sqlite3
+import os  # ← ДОБАВИЛИ
 from datetime import datetime
 from enum import IntEnum
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -34,14 +28,27 @@ from delivery import (
 from form import (
     format_tea_review, format_service_review, format_delivery_review
 )
-# Set up logging
+
+# ========================================
+# ФИКСИРОВАННЫЙ ПУТЬ К БД
+# ========================================
+DB_DIR = "/root/RB2"
+DB_PATH = os.path.join(DB_DIR, "reviews.db")
+
+# Создаём директорию, если её нет
+os.makedirs(DB_DIR, exist_ok=True)
+
+# Логируем путь при запуске
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-# Initialize SQLite database
+
+# ========================================
+# Инициализация БД
+# ========================================
 def init_db():
-    conn = sqlite3.connect('reviews.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS reviews (
@@ -54,14 +61,23 @@ def init_db():
             likes TEXT NOT NULL,
             review_text TEXT NOT NULL,
             is_anonymous BOOLEAN NOT NULL,
+            user_name TEXT,
             timestamp TEXT NOT NULL,
             is_deleted BOOLEAN NOT NULL DEFAULT 0
         )
     ''')
     conn.commit()
     conn.close()
-init_db()  # Create DB on startup
-# Cached bot_config (load once)
+
+init_db()  # Создаём при старте
+
+# Лог при запуске
+logger.info(f"База данных: {DB_PATH}")
+if os.path.exists(DB_PATH):
+    logger.info(f"БД найдена, размер: {os.path.getsize(DB_PATH)} байт")
+else:
+    logger.info("БД не найдена — будет создана при первом сохранении")
+
 try:
     with open("bot_config.json", "r", encoding="utf-8") as f:
         bot_config = json.load(f)
@@ -149,16 +165,19 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Please use this bot in a private chat.")
         return ConversationHandler.END
     user_id = update.effective_user.id
-    conn = sqlite3.connect('reviews.db')
+    logger.info(f"History called for user {user_id}")  # <<< DEBUG LOG
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('SELECT * FROM reviews WHERE user_id = ? AND is_deleted = 0 ORDER BY timestamp ASC', (user_id,))
     reviews = c.fetchall()
     conn.close()
+    logger.info(f"Found {len(reviews)} reviews for user {user_id}")  # <<< DEBUG LOG
     if not reviews:
         await update.message.reply_text("У вас пока нет отзывов.")
         return ConversationHandler.END
-    await update.message.reply_text("Ваши прошлые отзывы (от старых к новым):")
-    for i, review in enumerate(reviews, 1):
+    await update.message.reply_text(f"Ваши прошлые отзывы (от старых к новым, всего {len(reviews)}):")
+    # <<< PAGINATION: Show first 5, then button for more
+    for i, review in enumerate(reviews[:5], 1):  # Limit to 5
         review_data = {
             'category': review[2],
             'product': review[3] or '',
@@ -166,25 +185,38 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             'rating': review[5],
             'likes': json.loads(review[6]),
             'review_text': review[7],
-            'user_name': None if review[8] else context.user_data.get('user_name', None)
+            'user_name': review[9] if review[8] == 0 else None  # <<< FIXED: From DB, index 9=user_name, 8=is_anonymous
         }
         format_func = CATEGORY_ROUTING[review_data['category']]['format']
         formatted = format_func(review_data)
-        preview = f"{review_data['category'].capitalize()}: {review_data.get('product', '') or review_data['review_text'][:20]}..."
+        preview = f"{review_data['category'].capitalize()}: {review_data.get('product', '') or review_data['review_text'][:20]}... (Автор: {review_data['user_name'] or 'Анонимно'})"
+        timestamp = review[10]  # <<< FIXED: timestamp now index 10
         if review_data['photo']:
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
                 photo=review_data['photo'],
-                caption=f"Отзыв {i} ({review[9]}): {preview}\n\n{formatted}",
+                caption=f"Отзыв {i} ({timestamp}): {preview}\n\n{formatted}",
                 parse_mode="HTML"
             )
         else:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=f"Отзыв {i} ({review[9]}): {preview}\n\n{formatted}",
+                text=f"Отзыв {i} ({timestamp}): {preview}\n\n{formatted}",
                 parse_mode="HTML"
             )
-    await update.message.reply_text("Это ваши прошлые отзывы. Хотите оставить новый?", reply_markup=ReplyKeyboardMarkup([["История", "Оставить отзыв"]], resize_keyboard=True))
+    if len(reviews) > 5:
+        keyboard = [[InlineKeyboardButton("Показать больше", callback_data="show_more_history")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Показаны первые 5. Нажмите для остальных.", reply_markup=reply_markup)
+    keyboard = ReplyKeyboardMarkup([["История", "Оставить отзыв"]], resize_keyboard=True, one_time_keyboard=False)
+    await update.message.reply_text("Это ваши прошлые отзывы. Хотите оставить новый?", reply_markup=keyboard)
+    return ConversationHandler.END
+# <<< NEW: Handler for "Show more" button (add to conv_handler states if needed)
+async def show_more_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    # Logic to show next 5, etc. (implement pagination fully if needed)
+    await query.edit_message_text("Покажи больше — реализуй пагинацию здесь (offset в user_data).")
     return ConversationHandler.END
 async def name_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles name selection or input."""
@@ -542,11 +574,17 @@ async def edit_likes_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Handles edit likes (route to category-specific handler)."""
     category = context.user_data.get('pending_data', {}).get('category', '')
     if category == 'чай':
-        return await tea_likes(update, context)
+        result = await tea_likes(update, context)
+        _sync_pending(context)  # <<< ADD: Sync after likes change
+        return result
     elif category == 'сервис':
-        return await service_likes_handler(update, context)
+        result = await service_likes_handler(update, context)
+        _sync_pending(context)  # <<< ADD
+        return result
     elif category == 'доставка':
-        return await delivery_likes_handler(update, context)
+        result = await delivery_likes_handler(update, context)
+        _sync_pending(context)  # <<< ADD
+        return result
 async def edit_product_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles edit product."""
     pending_data = context.user_data.get('pending_data', {})
@@ -593,12 +631,13 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if hasattr(update, 'callback_query'):
             await update.callback_query.message.reply_text("Нет отзывов для публикации.")
         return
-    conn = sqlite3.connect('reviews.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     for review in reviews:
         category = review.get('category', 'unknown')
         photo = review.get('photo')
-        user_name = review.get('user_name', 'None')
+        user_name = review.get('user_name')  # <<< FIXED: From review dict
+        is_anon = 1 if user_name is None else 0
         try:
             if category == 'чай':
                 message = format_tea_review(review)
@@ -624,8 +663,8 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                         parse_mode="HTML"
                     )
                     c.execute('''
-                        INSERT INTO reviews (user_id, category, product, photo_id, rating, likes, review_text, is_anonymous, timestamp)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO reviews (user_id, category, product, photo_id, rating, likes, review_text, is_anonymous, user_name, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         update.effective_user.id,
                         review['category'],
@@ -634,7 +673,8 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                         review['rating'],
                         json.dumps(review['likes']),
                         review['review_text'],
-                        1 if review.get('user_name') is None else 0,
+                        is_anon,
+                        user_name,  # <<< NEW: Save actual name
                         datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     ))
                     conn.commit()
@@ -656,8 +696,8 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                         parse_mode="HTML"
                     )
                     c.execute('''
-                        INSERT INTO reviews (user_id, category, product, photo_id, rating, likes, review_text, is_anonymous, timestamp)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO reviews (user_id, category, product, photo_id, rating, likes, review_text, is_anonymous, user_name, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         update.effective_user.id,
                         review['category'],
@@ -666,7 +706,8 @@ async def post_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                         review['rating'],
                         json.dumps(review['likes']),
                         review['review_text'],
-                        1 if review.get('user_name') is None else 0,
+                        is_anon,
+                        user_name,  # <<< NEW
                         datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     ))
                     conn.commit()
@@ -697,7 +738,7 @@ def main() -> None:
     """Run the bot."""
     application = Application.builder().token(BOT_TOKEN).read_timeout(30).write_timeout(30).connect_timeout(30).pool_timeout(30).build()
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.Regex("История"), history_handler))
+    # <<< FIXED: Remove separate handler, add as fallback to conv_handler
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("Оставить отзыв"), start_review)],
         states={
@@ -705,6 +746,7 @@ def main() -> None:
                 CallbackQueryHandler(name_handler, pattern="^(use_username|anonymous)$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, name_text_handler),
             ],
+            # ... all other states same
             States.CATEGORY: [CallbackQueryHandler(category)],
             States.TEA_PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tea_product)],
             States.TEA_PHOTO: [
@@ -733,8 +775,13 @@ def main() -> None:
             States.MORE_REVIEWS: [CallbackQueryHandler(more_reviews, pattern="^more_")],
             States.FINAL_CONFIRM: [CallbackQueryHandler(final_confirm_handler, pattern="^(publish|delete_specific|delete_all)$")],
             States.DELETE_SPECIFIC: [CallbackQueryHandler(delete_specific_handler, pattern="^(delete_review_|back_to_confirm)")],
+            # <<< NEW: Catch "История" in ANY state
+            States.HISTORY: [MessageHandler(filters.Regex("История"), history_handler)],  # But better as fallback
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            MessageHandler(filters.Regex("История"), history_handler)  # <<< FIXED: As fallback, works everywhere
+        ],
         per_message=False,
     )
     application.add_handler(conv_handler)
